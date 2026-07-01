@@ -29,7 +29,7 @@ export const anonymousVaService = {
     const va = await sharedFundVaService.getOrCreateForOrgFund(
       orgId,
       fundId,
-      `${orgName} — Anonymous Giving`,
+      `${orgName} - Anonymous Giving`,
     );
 
     return {

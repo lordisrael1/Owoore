@@ -66,7 +66,7 @@ export const vaService = {
     // ── Shared-VA funds (e.g. Offering): one VA for the whole org ───────
     if (fund.is_shared_va) {
       const org = await queryOne<{ name: string }>(`SELECT name FROM organisations WHERE id = $1`, [orgId]);
-      const accountName = `${org?.name ?? 'Owoore'} — ${fund.name}`;
+      const accountName = `${org?.name ?? 'Owoore'} - ${fund.name}`;
 
       const va = await sharedFundVaService.getOrCreateForOrgFund(orgId, fundTypeId, accountName);
 
@@ -107,7 +107,7 @@ export const vaService = {
 
     const accountRef  = vaReference(memberId, fundTypeId);
     // Account name format: "Bro Adebayo — Tithe — Grace Bible Church"
-    const accountName = `${member.display_name} — ${fund.name} — ${org.name}`.slice(0, 100);
+    const accountName = `${member.display_name} - ${fund.name} - ${org.name}`.slice(0, 100);
 
     const expiryDate  = fund.expires_at
       ? new Date(fund.expires_at).toISOString().slice(0, 10)
