@@ -62,7 +62,12 @@ export const vaNomba = {
 
     const payload: Record<string, unknown> = {
       accountRef,
-      accountName: accountName.slice(0, 64), // Nomba max is 64 chars
+      // Nomba rejects special characters — strip to alphanumeric + spaces only
+      accountName: accountName
+        .replace(/[^a-zA-Z0-9 ]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 64),
     };
 
     if (expiryDate) {
@@ -81,16 +86,15 @@ export const vaNomba = {
 
     try {
       const response = await nombaClient.post(
-        '/accounts/virtual',
+        `/accounts/virtual/${env.NOMBA_SUB_ACCOUNT_ID}`,
         payload,
-        {
-          headers: { accountId: env.NOMBA_ACCOUNT_ID },
-        },
+        { headers: { accountId: env.NOMBA_ACCOUNT_ID } },
       );
 
       const { code, data, description } = response.data;
 
       if (code !== '00') {
+        logger.error({ code, description, full_response: response.data }, '[VaNomba] Nomba non-success response');
         throw new Error(
           `Nomba VA creation failed: ${description ?? 'Unknown error'} (code: ${code})`,
         );
@@ -114,6 +118,12 @@ export const vaNomba = {
 
     } catch (err: any) {
       const msg = err.response?.data?.description ?? err.message;
+
+      logger.error({
+        account_ref: accountRef,
+        nomba_status: err.response?.status,
+        nomba_full_response: err.response?.data,
+      }, '[VaNomba] Full Nomba error response');
 
       // Nomba already has this accountRef (e.g. a prior call succeeded on their
       // side but our DB write failed afterward) — recover instead of failing.
