@@ -63,15 +63,6 @@ export const idempotencyService = {
   },
 
 
-//   TODO: const row = await queryOne<{ exists: number }>(
-//   `SELECT 1 AS exists
-//    FROM webhook_log
-//    WHERE nomba_request_id = $1
-//      AND processed = TRUE
-//    LIMIT 1`,
-//   [requestId],
-// );
-
   /**
    * markProcessed — records that this requestId has been successfully handled.
    *

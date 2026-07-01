@@ -17,6 +17,10 @@ const router = Router();
  
 router.post(
   '/nomba',
+  (req,res,next)=>{
+   console.log("NOMBA HIT");
+   next();
+ },
   // express.raw() is applied in app.ts specifically for this route
   // before express.json() — see app.ts for the ordering
   webhookVerify,

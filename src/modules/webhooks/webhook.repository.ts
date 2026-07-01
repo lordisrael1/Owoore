@@ -23,9 +23,11 @@ export const webhookRepository = {
    * Returns the internal UUID of the log row so we can update
    * it later (markProcessed / markFailed).
    *
-   * If the nomba_request_id already exists (duplicate delivery
-   * that slipped past the idempotency check), the INSERT is
-   * silently ignored via ON CONFLICT DO NOTHING.
+   * If the nomba_request_id already exists (duplicate delivery),
+   * the INSERT is silently ignored via ON CONFLICT DO NOTHING and
+   * 'duplicate' is returned. Caller must return early on 'duplicate'.
+   *
+   * Throws on DB failure — processing must not continue without an audit row.
    */
   async logEvent(input: LogEventInput): Promise<string> {
     const { nomba_request_id, event_type, raw_payload, org_id } = input;
@@ -49,9 +51,8 @@ export const webhookRepository = {
       return row.id;
     } catch (err: any) {
       logger.error({ nomba_request_id, err: err.message },
-        '[WebhookRepo] Failed to log event — continuing with processing');
-      // Non-fatal: processing continues even if logging fails
-      return 'log-failed';
+        '[WebhookRepo] Failed to log event — aborting processing (no audit trail)');
+      throw err;
     }
   },
 
@@ -59,7 +60,7 @@ export const webhookRepository = {
    * markProcessed — updates the log row after successful processing.
    */
   async markProcessed(logId: string): Promise<void> {
-    if (logId === 'duplicate' || logId === 'log-failed') return;
+    if (logId === 'duplicate') return;
 
     await query(
       `UPDATE webhook_log
@@ -74,7 +75,7 @@ export const webhookRepository = {
    * These rows are queryable for manual replay or monitoring.
    */
   async markFailed(logId: string, errorMessage: string): Promise<void> {
-    if (logId === 'duplicate' || logId === 'log-failed') return;
+    if (logId === 'duplicate') return;
 
     await query(
       `UPDATE webhook_log

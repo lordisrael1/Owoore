@@ -20,9 +20,9 @@ import { nombaTransferService } from '../payouts/nomba-transfer.service';
  */
 
 export interface NombaWebhookEvent {
-  requestId: string;
-  event:     string;
-  data:      Record<string, unknown>;
+  requestId:  string;
+  event_type: string;
+  data:       Record<string, unknown>;
   [key: string]: unknown;
 }
 
@@ -38,22 +38,23 @@ export const webhookProcessor = {
       return;
     }
 
-    // ── Step 1: Idempotency check ───────────────────────────────────────
-    const alreadyProcessed = await idempotencyService.isProcessed(requestId);
-    if (alreadyProcessed) {
-      logger.info({ nomba_request_id: requestId, event_type: eventType },
-        '[WebhookProcessor] Duplicate event — skipping');
-      return;
-    }
-
-    // ── Step 2: Log raw event ───────────────────────────────────────────
+    // ── Step 1: Log raw event (atomic idempotency gate via UNIQUE constraint) ──
+    // The DB INSERT with ON CONFLICT DO NOTHING is the authoritative dedup guard.
+    // Two concurrent deliveries race to insert; only one wins — the other gets
+    // 'duplicate' here and returns before any business logic runs.
     const logId = await webhookRepository.logEvent({
       nomba_request_id: requestId,
       event_type:       eventType,
       raw_payload:      event,
     });
 
-    // ── Step 3: Route to handler ────────────────────────────────────────
+    if (logId === 'duplicate') {
+      logger.info({ nomba_request_id: requestId, event_type: eventType },
+        '[WebhookProcessor] Duplicate event — skipping');
+      return;
+    }
+
+    // ── Step 2: Route to handler ────────────────────────────────────────
     try {
       switch (eventType) {
         case 'payment_success':
@@ -83,7 +84,7 @@ export const webhookProcessor = {
           break;
       }
 
-      // ── Step 4: Mark processed ─────────────────────────────────────────
+      // ── Step 3: Mark processed ─────────────────────────────────────────
       await idempotencyService.markProcessed(requestId);
       await webhookRepository.markProcessed(logId);
 
