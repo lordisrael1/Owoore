@@ -2,7 +2,7 @@ import express, { Express } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import { requestLogger }  from './middleware/requestLogger';
-import { errorHandler }   from './middleware/errorHandler';
+import { errorHandler }   from './middleware/errorhandler';
 
 // ── Route imports ─────────────────────────────────────────────────────
 import healthRouter      from './modules/health/health.routes';
