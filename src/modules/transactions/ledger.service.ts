@@ -62,6 +62,7 @@ export const ledgerService = {
        ON CONFLICT (org_id, fund_type_id, period_month)
        DO UPDATE SET
          total_collected_kobo = fund_ledger.total_collected_kobo + EXCLUDED.total_collected_kobo,
+         member_count_paid    = fund_ledger.member_count_paid + 1,
          total_transactions   = fund_ledger.total_transactions + 1,
          updated_at           = NOW()`,
       [org_id, fund_type_id, amountKobo, period],
@@ -99,13 +100,18 @@ export const ledgerService = {
    */
   async softLock(input: { org_id: string; fund_type_id: string; amountKobo: number }): Promise<void> {
     const { org_id, fund_type_id, amountKobo } = input;
-    const period = new Date().toISOString().slice(0, 7);
 
+    // Lock against the latest period row so cross-month payouts work correctly
     await query(
       `UPDATE fund_ledger
        SET soft_lock_kobo = soft_lock_kobo + $3, updated_at = NOW()
-       WHERE org_id = $1 AND fund_type_id = $2 AND period_month = $4`,
-      [org_id, fund_type_id, amountKobo, period],
+       WHERE org_id = $1 AND fund_type_id = $2
+         AND period_month = (
+           SELECT period_month FROM fund_ledger
+           WHERE org_id = $1 AND fund_type_id = $2
+           ORDER BY period_month DESC LIMIT 1
+         )`,
+      [org_id, fund_type_id, amountKobo],
     );
 
     logger.info({ org_id, fund_type_id, amountKobo },
@@ -118,13 +124,18 @@ export const ledgerService = {
    */
   async releaseLock(input: { org_id: string; fund_type_id: string; amountKobo: number }): Promise<void> {
     const { org_id, fund_type_id, amountKobo } = input;
-    const period = new Date().toISOString().slice(0, 7);
 
+    // Release from the period that holds the soft lock (matches softLock behaviour)
     await query(
       `UPDATE fund_ledger
        SET soft_lock_kobo = GREATEST(0, soft_lock_kobo - $3), updated_at = NOW()
-       WHERE org_id = $1 AND fund_type_id = $2 AND period_month = $4`,
-      [org_id, fund_type_id, amountKobo, period],
+       WHERE org_id = $1 AND fund_type_id = $2
+         AND period_month = (
+           SELECT period_month FROM fund_ledger
+           WHERE org_id = $1 AND fund_type_id = $2 AND soft_lock_kobo > 0
+           ORDER BY period_month DESC LIMIT 1
+         )`,
+      [org_id, fund_type_id, amountKobo],
     );
 
     logger.info({ org_id, fund_type_id, amountKobo },

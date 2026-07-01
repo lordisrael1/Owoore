@@ -33,38 +33,15 @@ export function verifyNombaSignature(
 ): boolean {
   if (!signature || !timestamp) return false;
 
-  let event: Record<string, unknown>;
-  try {
-    event = JSON.parse(rawBody.toString('utf8'));
-  } catch {
-    return false;
-  }
-
-  const tx       = (event.data as any)?.transaction ?? {};
-  const merchant = (event.data as any)?.merchant    ?? {};
-
-  // Construct signing string exactly as Nomba does (from their docs/SDK example)
-  const signingPayload = [
-    event.event_type ?? event.event ?? '',
-    event.requestId  ?? '',
-    merchant.userId  ?? '',
-    merchant.walletId ?? '',
-    tx.transactionId  ?? '',
-    tx.type           ?? '',
-    tx.time           ?? '',
-    tx.responseCode   ?? '',
-    timestamp,
-  ].join(':');
-
+  // Nomba signs the raw request body with HMAC-SHA256, base64-encoded
   const expected = createHmac('sha256', env.NOMBA_WEBHOOK_SECRET)
-    .update(signingPayload)
+    .update(rawBody)
     .digest('base64');
 
   try {
-    // timingSafeEqual prevents timing oracle attacks
     return timingSafeEqual(
-      Buffer.from(expected,   'base64'),
-      Buffer.from(signature,  'base64'),
+      Buffer.from(expected,  'base64'),
+      Buffer.from(signature, 'base64'),
     );
   } catch {
     return false;

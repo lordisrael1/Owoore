@@ -1,5 +1,4 @@
 import { queryOne, queryMany } from '../../db';
-import { fromKobo } from '../../utils/kobo';
 
 /**
  * dashboard.repository.ts
@@ -209,10 +208,10 @@ export const dashboardRepository = {
        FROM fund_ledger fl
        JOIN fund_types ft ON ft.id = fl.fund_type_id
        WHERE ft.org_id = $1
-         AND fl.period_month >= TO_CHAR(NOW() - INTERVAL '${months} months', 'YYYY-MM')
+         AND fl.period_month >= TO_CHAR(NOW() - ($2 * INTERVAL '1 month'), 'YYYY-MM')
        GROUP BY fl.period_month
        ORDER BY fl.period_month ASC`,
-      [orgId],
+      [orgId, months],
     );
   },
 };

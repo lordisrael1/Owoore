@@ -3,6 +3,7 @@ import { withTransaction, queryOne } from '../../db';
 import { currentPeriod } from '../../utils/formatMoney';
 import { reconciliationService } from '../transactions/reconciliation.service';
 import { ledgerService } from '../transactions/ledger.service';
+import { notificationDispatcher } from './notification.dispatcher';
 
 /**
  * inflow-handler.service.ts
@@ -191,6 +192,20 @@ export const inflowHandlerService = {
       nomba_request_id:  requestId,
     }, '[InflowHandler] Transaction written and ledger updated');
 
+    // 6. Send notification — fires AFTER commit, never inside withTransaction
+    notificationDispatcher.notifyMemberPayment({
+      email:         memberAccount.member_email,
+      memberName:    memberAccount.member_name,
+      amountKobo,
+      fundName:      memberAccount.fund_name,
+      orgName:       memberAccount.org_name,
+      status:        reconciliation.status,
+      deficitKobo:   reconciliation.deficitKobo,
+      accountNumber: tx.aliasAccountNumber,
+    }).catch((err) => {
+      logger.warn({ member_id, err: err.message },
+        '[InflowHandler] Notification failed — payment still recorded');
+    });
   },
 
   // ── Shared fund inflow (Anonymous Giving, Offering, etc.) ───────────────

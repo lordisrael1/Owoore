@@ -10,9 +10,9 @@ import { nombaTransferService } from '../payouts/nomba-transfer.service';
  * Routes each Nomba event to the correct handler after idempotency check.
  *
  * Supported events:
- *   virtual_account.funded → inflowHandlerService  (member payment in)
- *   transfer.success       → nombaTransferService   (payout settled)
- *   transfer.failed        → nombaTransferService   (payout reversed)
+ *   payment_success  → inflowHandlerService   (member payment in)
+ *   payout_success   → nombaTransferService   (payout settled)
+ *   payout_failed    → nombaTransferService   (payout reversed)
  *
  * No dynamic imports — all handlers are real modules imported at the top.
  * No circular dependency: webhooks → payouts is one direction only.
