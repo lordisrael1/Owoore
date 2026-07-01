@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { generalRateLimiter } from '../../middleware/rateLimiter';
+import { generalRateLimiter } from '../../middleware/ratelimiter';
 import { anonymousController } from './anonymous.controller';
 
 /**

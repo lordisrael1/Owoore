@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { authenticateMember } from '../../middleware/authenticate';
-import { generalRateLimiter } from '../../middleware/rateLimiter';
+import { generalRateLimiter } from '../../middleware/ratelimiter';
 import { vaController } from './va.controller';
 
 /**

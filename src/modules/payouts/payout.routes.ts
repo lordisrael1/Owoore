@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { authenticateAdmin } from '../../middleware/authenticate';
 import { requireRole } from '../../middleware/authorise';
 import { validateBody } from '../../middleware/validateRequest';
-import { generalRateLimiter } from '../../middleware/rateLimiter';
+import { generalRateLimiter } from '../../middleware/ratelimiter';
 import { initPayoutSchema } from './payout.validator';
 import { payoutController } from './payout.controller';
  

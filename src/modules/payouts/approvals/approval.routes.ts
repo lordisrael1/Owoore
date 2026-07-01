@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { approvalController } from './approval.controller';
-import { approvalRateLimiter } from '../../../middleware/rateLimiter';
+import { approvalRateLimiter } from '../../../middleware/ratelimiter';
 
 /**
  * approval.routes.ts

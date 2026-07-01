@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { validateBody } from '../../middleware/validateRequest';
-import { otpRateLimiter, adminLoginRateLimiter } from '../../middleware/rateLimiter';
+import { otpRateLimiter, adminLoginRateLimiter } from '../../middleware/ratelimiter';
 import { authenticate } from '../../middleware/authenticate';
 import {
   sendOtpSchema,

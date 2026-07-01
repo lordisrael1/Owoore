@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { authenticateAdmin } from '../../middleware/authenticate';
 import { requireRole } from '../../middleware/authorise';
 import { validateBody, validateParams } from '../../middleware/validateRequest';
-import { generalRateLimiter } from '../../middleware/rateLimiter';
+import { generalRateLimiter } from '../../middleware/ratelimiter';
 import {
   inviteSchema, acceptInviteSchema, setPasswordSchema, inviteTokenParamSchema,
 } from './admin-users.validator';

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { authenticateAdmin } from '../../middleware/authenticate';
-import { generalRateLimiter } from '../../middleware/rateLimiter';
+import { generalRateLimiter } from '../../middleware/ratelimiter';
 import { bankController } from './bank.controller';
 
 const router = Router();

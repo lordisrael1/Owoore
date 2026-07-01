@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { validateBody, validateParams } from '../../middleware/validateRequest';
 import { authenticateAdmin } from '../../middleware/authenticate';
 import { scopeToOrg } from '../../middleware/authorise';
-import { generalRateLimiter } from '../../middleware/rateLimiter';
+import { generalRateLimiter } from '../../middleware/ratelimiter';
 import { uploadLogo } from '../../middleware/upload';
 import {
   createOrgSchema,
