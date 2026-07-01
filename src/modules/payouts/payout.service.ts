@@ -6,6 +6,7 @@ import { payoutRepository } from './payout.repository';
 import { manualPayoutService } from './maunal-payout.service';
 import { ledgerService } from '../transactions/ledger.service';
 import { assertTransition, canCancel } from './payout-state.machine';
+import { findOrCreateOrgBankAccount } from './bank-account.service';
 
 /**
  * payout.service.ts
@@ -22,7 +23,8 @@ import { assertTransition, canCancel } from './payout-state.machine';
 export interface InitPayoutParams {
   orgId:          string;
   fundTypeId:     string;
-  bankAccountId:  string;
+  bankCode:       string;
+  accountNumber:  string;
   initiatedBy:    string;  // admin_user.id
   amountNaira:    number;  // frontend sends naira — we convert to kobo here
   purpose:        string;
@@ -38,7 +40,7 @@ export const payoutService = {
    * 4. Check threshold → route to manual or multi-approver
    */
   async initiate(params: InitPayoutParams) {
-    const { orgId, fundTypeId, bankAccountId,
+    const { orgId, fundTypeId, bankCode, accountNumber,
             initiatedBy, amountNaira, purpose } = params;
 
     const amountKobo = toKobo(amountNaira);
@@ -53,21 +55,10 @@ export const payoutService = {
     if (!fund)        throw Errors.notFound('Fund type');
     if (!fund.is_active) throw Errors.badRequest('Fund type is not active');
 
-    // Verify bank account belongs to this org and is verified
-    const bankAccount = await queryOne<{
-      id: string; bank_code: string; account_number: string;
-      account_name: string; is_verified: boolean;
-    }>(
-      `SELECT id, bank_code, account_number, account_name, is_verified
-       FROM org_bank_accounts WHERE id = $1 AND org_id = $2`,
-      [bankAccountId, orgId],
-    );
-    if (!bankAccount) throw Errors.notFound('Bank account');
-    if (!bankAccount.is_verified) {
-      throw Errors.badRequest(
-        'Bank account is not verified. Verify via account lookup before initiating payouts.',
-      );
-    }
+    // Verify the recipient via Nomba and reuse/save it as an org bank account
+    const bankAccount = await findOrCreateOrgBankAccount({
+      orgId, bankCode, accountNumber,
+    });
 
     // Check available balance
     const balance = await ledgerService.getBalance(orgId, fundTypeId);
@@ -105,7 +96,7 @@ export const payoutService = {
     // ── Route: below threshold → manual direct transfer ──────────────────
     if (amountKobo < threshold) {
       return manualPayoutService.execute({
-        orgId, fundTypeId, bankAccountId, initiatedBy,
+        orgId, fundTypeId, bankAccountId: bankAccount.id, initiatedBy,
         amountKobo, purpose,
         bankCode:      bankAccount.bank_code,
         accountNumber: bankAccount.account_number,
@@ -115,7 +106,7 @@ export const payoutService = {
     // ── Route: above threshold → multi-approver flow ─────────────────────
     const { approvalPayoutService } = await import('./approvals/approval.service');
     return approvalPayoutService.initiate({
-      orgId, fundTypeId, bankAccountId, initiatedBy,
+      orgId, fundTypeId, bankAccountId: bankAccount.id, initiatedBy,
       amountKobo, purpose,
       minApprovers,
       autoDeclineHours: autoDeclineH,

@@ -8,12 +8,13 @@ export const payoutController = {
   // POST /payouts — initiate a new payout request
   initiate: catchAsync(async (req: Request, res: Response) => {
     const user = (req as any).user;
-    const { fund_type_id, bank_account_id, amount, purpose } = req.body;
+    const { fund_type_id, bank_code, account_number, amount, purpose } = req.body;
 
     const result = await payoutService.initiate({
       orgId:         user.orgId,
       fundTypeId:    fund_type_id,
-      bankAccountId: bank_account_id,
+      bankCode:      bank_code,
+      accountNumber: account_number,
       initiatedBy:   user.sub,
       amountNaira:   amount,
       purpose,

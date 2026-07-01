@@ -6,7 +6,8 @@ import { z } from 'zod';
 
 export const initPayoutSchema = z.object({
   fund_type_id:     z.string().uuid('fund_type_id must be a valid UUID'),
-  bank_account_id:  z.string().uuid('bank_account_id must be a valid UUID'),
+  bank_code:        z.string().min(1, 'bank_code is required'),
+  account_number:   z.string().regex(/^\d{10}$/, 'account_number must be a 10-digit account number'),
   amount:           z.number({ error: 'amount is required' })
                      .positive('amount must be greater than zero')
                      .max(100_000_000, 'amount cannot exceed ₦1,000,000 per request'),
