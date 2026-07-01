@@ -21,7 +21,12 @@ import { env } from '../config/env';
  *   transaction.transactionId:transaction.type:transaction.time:
  *   transaction.responseCode:nomba-timestamp
  *
- * @param rawBody   - raw Buffer from express.raw() (used to parse payload)
+ * A field missing from a given event type (e.g. payment_failed has no
+ * merchant.walletId) is treated as an empty string, matching Nomba's
+ * own reference implementation. A responseCode of the literal string
+ * "null" is also normalized to "".
+ *
+ * @param rawBody   - raw Buffer from express.raw() (parsed as JSON here)
  * @param signature - value of the 'nomba-signature' header (base64)
  * @param timestamp - value of the 'nomba-timestamp' header
  * @returns true if signature matches, false otherwise
@@ -33,9 +38,31 @@ export function verifyNombaSignature(
 ): boolean {
   if (!signature || !timestamp) return false;
 
-  // Nomba signs the raw request body with HMAC-SHA256, base64-encoded
+  let payload: any;
+  try {
+    payload = JSON.parse(rawBody.toString('utf8'));
+  } catch {
+    return false;
+  }
+
+  const data        = payload?.data ?? {};
+  const merchant     = data.merchant ?? {};
+  const transaction  = data.transaction ?? {};
+
+  const eventType       = payload?.event_type ?? '';
+  const requestId       = payload?.requestId ?? '';
+  const userId          = merchant.userId ?? '';
+  const walletId        = merchant.walletId ?? '';
+  const transactionId   = transaction.transactionId ?? '';
+  const transactionType = transaction.type ?? '';
+  const transactionTime = transaction.time ?? '';
+  let responseCode      = transaction.responseCode ?? '';
+  if (responseCode === 'null') responseCode = '';
+
+  const hashingPayload = `${eventType}:${requestId}:${userId}:${walletId}:${transactionId}:${transactionType}:${transactionTime}:${responseCode}:${timestamp}`;
+
   const expected = createHmac('sha256', env.NOMBA_WEBHOOK_SECRET)
-    .update(rawBody)
+    .update(hashingPayload)
     .digest('base64');
 
   try {
