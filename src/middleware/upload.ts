@@ -13,4 +13,4 @@ export const uploadLogo = multer({
       cb(Errors.badRequest('Only image files are allowed'));
     }
   },
-}).single('logo_url');
+}).single('logo');
