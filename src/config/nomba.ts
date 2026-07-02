@@ -54,40 +54,50 @@ async function getValidToken(): Promise<string> {
   return fetchNombaToken();
 }
 
-// ── Axios instance ─────────────────────────────────────────────────────────
-export const nombaClient: AxiosInstance = axios.create({
-  baseURL: `${env.NOMBA_BASE_URL}/v1`,
-  headers: {
-    'Content-Type': 'application/json',
-    accountId: env.NOMBA_ACCOUNT_ID,
-  },
-  timeout: 30000, // 30s — Nomba transfers may be slow
-});
+// ── Axios instances ────────────────────────────────────────────────────────
+// Nomba mixes API versions across endpoints — most sit under /v1, but the
+// sub-account transfer endpoint is /v2 directly off the root (NOT /v1/v2).
+// Two clients, same auth/logging behaviour, different base paths.
+function createNombaClient(baseURL: string): AxiosInstance {
+  const client = axios.create({
+    baseURL,
+    headers: {
+      'Content-Type': 'application/json',
+      accountId: env.NOMBA_ACCOUNT_ID,
+    },
+    timeout: 30000, // 30s — Nomba transfers may be slow
+  });
 
-// Request interceptor — inject Bearer token on every call
-nombaClient.interceptors.request.use(
-  async (config: InternalAxiosRequestConfig) => {
-    const token = await getValidToken();
-    config.headers.Authorization = `Bearer ${token}`;
-    return config;
-  },
-  (error) => Promise.reject(error),
-);
+  // Request interceptor — inject Bearer token on every call
+  client.interceptors.request.use(
+    async (config: InternalAxiosRequestConfig) => {
+      const token = await getValidToken();
+      config.headers.Authorization = `Bearer ${token}`;
+      return config;
+    },
+    (error) => Promise.reject(error),
+  );
 
-// Response interceptor — log Nomba errors with full context
-nombaClient.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    const nombaError = error.response?.data;
-    console.error('[Nomba] API error', {
-      status: error.response?.status,
-      url: error.config?.url,
-      nombaCode: nombaError?.code,
-      nombaMessage: nombaError?.message,
-    });
-    return Promise.reject(error);
-  },
-);
+  // Response interceptor — log Nomba errors with full context
+  client.interceptors.response.use(
+    (response) => response,
+    (error) => {
+      const nombaError = error.response?.data;
+      console.error('[Nomba] API error', {
+        status: error.response?.status,
+        url: error.config?.url,
+        nombaCode: nombaError?.code,
+        nombaMessage: nombaError?.message,
+      });
+      return Promise.reject(error);
+    },
+  );
+
+  return client;
+}
+
+export const nombaClient: AxiosInstance   = createNombaClient(`${env.NOMBA_BASE_URL}/v1`);
+export const nombaClientV2: AxiosInstance = createNombaClient(env.NOMBA_BASE_URL);
 
 /**
  * initNomba — fetch the first token at startup so the first real

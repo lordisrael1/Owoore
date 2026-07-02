@@ -312,14 +312,34 @@ export const approvalPayoutService = {
     await payoutRepository.updateStatus(payout.id, 'TRANSFERRING');
 
     // Fire Nomba transfer
-    const transfer = await nombaTransferService.initiateTransfer({
-      payoutRequestId: payout.id,
-      amountKobo:      payout.amount_kobo,
-      bankCode:        bankAccount.bank_code,
-      accountNumber:   bankAccount.account_number,
-      accountName:     bankAccount.account_name,
-      narration:       `Owoore payout: ${payout.purpose.slice(0, 50)}`,
-    });
+    let transfer;
+    try {
+      transfer = await nombaTransferService.initiateTransfer({
+        payoutRequestId: payout.id,
+        amountKobo:      payout.amount_kobo,
+        bankCode:        bankAccount.bank_code,
+        accountNumber:   bankAccount.account_number,
+        accountName:     bankAccount.account_name,
+        narration:       `Owoore payout: ${payout.purpose.slice(0, 50)}`,
+      });
+    } catch (err: any) {
+      await payoutRepository.updateStatus(payout.id, 'FAILED', {
+        transfer_error: err.message ?? 'Transfer request failed',
+      });
+      await ledgerService.releaseLock({
+        org_id:       payout.org_id,
+        fund_type_id: payout.fund_type_id,
+        amountKobo:   payout.amount_kobo,
+      });
+
+      logger.error({
+        payout_id: payout.id, err: err.message,
+      }, '[ApprovalService] Transfer call failed — payout marked FAILED, funds unlocked');
+
+      throw Errors.nombaError(
+        `Transfer could not be completed: ${err.message}. Funds have been unlocked — the initiator can retry.`,
+      );
+    }
 
     await payoutRepository.updateStatus(payout.id, 'TRANSFERRING', {
       nomba_transfer_ref: transfer.nombaTransferRef,

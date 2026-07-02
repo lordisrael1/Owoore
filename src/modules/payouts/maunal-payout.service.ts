@@ -70,19 +70,39 @@ export const manualPayoutService = {
 
     await ledgerService.softLock({ org_id: orgId, fund_type_id: fundTypeId, amountKobo });
 
+    // Mark TRANSFERRING before firing — so a failed/thrown call below is always
+    // recoverable (TRANSFERRING → FAILED is valid; APPROVED has no FAILED path)
+    assertTransition('APPROVED', 'TRANSFERRING');
+    await payoutRepository.updateStatus(payout.id, 'TRANSFERRING');
+
     // 5. Fire Nomba transfer
     const nombaRef = payoutTransferRef(payout.id);
-    const transfer = await nombaTransferService.initiateTransfer({
-      payoutRequestId: payout.id,
-      amountKobo,
-      bankCode:        lookup.bankCode,
-      accountNumber:   lookup.accountNumber,
-      accountName:     lookup.accountName,
-      narration:       `Owoore manual payout: ${purpose.slice(0, 50)}`,
-    });
+    let transfer;
+    try {
+      transfer = await nombaTransferService.initiateTransfer({
+        payoutRequestId: payout.id,
+        amountKobo,
+        bankCode:        lookup.bankCode,
+        accountNumber:   lookup.accountNumber,
+        accountName:     lookup.accountName,
+        narration:       `Owoore manual payout: ${purpose.slice(0, 50)}`,
+      });
+    } catch (err: any) {
+      await payoutRepository.updateStatus(payout.id, 'FAILED', {
+        transfer_error: err.message ?? 'Transfer request failed',
+      });
+      await ledgerService.releaseLock({ org_id: orgId, fund_type_id: fundTypeId, amountKobo });
 
-    // 6. Mark as TRANSFERRING — webhook completes the rest
-    assertTransition('APPROVED', 'TRANSFERRING');
+      logger.error({
+        payout_id: payout.id, err: err.message,
+      }, '[ManualPayout] Transfer call failed — payout marked FAILED, funds unlocked');
+
+      throw Errors.nombaError(
+        `Transfer could not be completed: ${err.message}. Funds have been unlocked — you can retry.`,
+      );
+    }
+
+    // 6. Record transfer refs — status is already TRANSFERRING
     await payoutRepository.updateStatus(payout.id, 'TRANSFERRING', {
       nomba_transfer_ref: transfer.nombaTransferRef,
       nomba_transfer_id:  transfer.nombaTransferId,

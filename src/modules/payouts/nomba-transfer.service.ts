@@ -1,4 +1,4 @@
-import { nombaClient } from '../../config/nomba';
+import { nombaClient, nombaClientV2 } from '../../config/nomba';
 import { env } from '../../config/env';
 import { logger } from '../../utils/logger';
 import { AppError, Errors } from '../../utils/AppError';
@@ -99,7 +99,7 @@ export const nombaTransferService = {
     try {
       // Use sub-account endpoint so funds come from Owoore sub-account
       // (not the parent account)
-      const response = await nombaClient.post(
+      const response = await nombaClientV2.post(
         `/v2/transfers/bank/${env.NOMBA_SUB_ACCOUNT_ID}`,
         {
           amount:        amountKobo,
@@ -140,10 +140,10 @@ export const nombaTransferService = {
       }
 
       // ── Handle non-success codes ──────────────────────────────────────
-      // Nomba uses "successful": true at top level even for some error states
-      if (!body.successful && body.status !== 'SUCCESS') {
+      // Same envelope as every other Nomba endpoint: { code, description, data }
+      if (body.code !== '00') {
         throw new AppError(
-          `Nomba transfer rejected: ${body.message ?? body.description ?? 'Unknown error'}`,
+          `Nomba transfer rejected: ${body.description ?? body.message ?? 'Unknown error'}`,
           502,
           false,
           'NOMBA_TRANSFER_REJECTED',

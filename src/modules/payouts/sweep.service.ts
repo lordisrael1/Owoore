@@ -123,15 +123,32 @@ export const sweepService = {
     await payoutRepository.updateStatus(payout.id, 'APPROVED');
     await ledgerService.softLock({ org_id, fund_type_id, amountKobo });
 
+    // Mark TRANSFERRING before firing — so a failed/thrown call below is always
+    // recoverable (TRANSFERRING → FAILED is valid; APPROVED has no FAILED path)
+    await payoutRepository.updateStatus(payout.id, 'TRANSFERRING');
+
     // 4. Fire Nomba transfer
-    const transfer = await nombaTransferService.initiateTransfer({
-      payoutRequestId: payout.id,
-      amountKobo,
-      bankCode:        lookup.bankCode,
-      accountNumber:   lookup.accountNumber,
-      accountName:     lookup.accountName,
-      narration:       `Owoore auto-sweep: ${fund_name.slice(0, 40)}`,
-    });
+    let transfer;
+    try {
+      transfer = await nombaTransferService.initiateTransfer({
+        payoutRequestId: payout.id,
+        amountKobo,
+        bankCode:        lookup.bankCode,
+        accountNumber:   lookup.accountNumber,
+        accountName:     lookup.accountName,
+        narration:       `Owoore auto-sweep: ${fund_name.slice(0, 40)}`,
+      });
+    } catch (err: any) {
+      await payoutRepository.updateStatus(payout.id, 'FAILED', {
+        transfer_error: err.message ?? 'Transfer request failed',
+      });
+      await ledgerService.releaseLock({ org_id, fund_type_id, amountKobo });
+
+      logger.error({
+        payout_id: payout.id, org_name, fund_name, err: err.message,
+      }, '[Sweep] Transfer call failed — payout marked FAILED, funds unlocked');
+      return;
+    }
 
     await payoutRepository.updateStatus(payout.id, 'TRANSFERRING', {
       nomba_transfer_ref: transfer.nombaTransferRef,

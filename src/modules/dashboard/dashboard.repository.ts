@@ -59,11 +59,12 @@ export const dashboardRepository = {
     pending_payouts_kobo:          number;
     active_members:                number;
     total_transactions:            number;
+    deficit_member_count:          number;
     period_month:                  string;
   }> {
     const currentPeriod = new Date().toISOString().slice(0, 7);
 
-    const [ledger, members, pendingPayouts] = await Promise.all([
+    const [ledger, members, pendingPayouts, deficitCount] = await Promise.all([
       queryOne<{
         total_collected: string;
         total_paid_out:  string;
@@ -87,8 +88,30 @@ export const dashboardRepository = {
       queryOne<{ total_kobo: string }>(
         `SELECT COALESCE(SUM(amount_kobo), 0)::TEXT AS total_kobo
          FROM payout_requests
-         WHERE org_id = $1 AND status IN ('PENDING','PARTIAL','APPROVED','TRANSFERRING')`,
+         WHERE org_id = $1 AND status IN ('PENDING','PARTIAL')`,
         [orgId],
+      ),
+      queryOne<{ deficit_count: string }>(
+        `SELECT COUNT(*)::TEXT AS deficit_count
+         FROM members m
+         CROSS JOIN fund_types ft
+         LEFT JOIN member_fund_accounts mfa
+           ON mfa.member_id = m.id AND mfa.fund_type_id = ft.id
+         LEFT JOIN (
+           SELECT member_fund_account_id,
+                  COUNT(*)::INT              AS tx_count,
+                  COALESCE(SUM(amount_kobo), 0)::BIGINT AS paid_kobo
+           FROM transactions WHERE period_month = $2
+           GROUP BY member_fund_account_id
+         ) t ON t.member_fund_account_id = mfa.id
+         WHERE m.org_id = $1 AND m.is_active = TRUE
+           AND ft.org_id = $1 AND ft.is_active = TRUE
+           AND (
+             COALESCE(t.tx_count, 0) = 0
+             OR (ft.expected_amt_kobo IS NOT NULL
+                 AND COALESCE(t.paid_kobo, 0) < ft.expected_amt_kobo)
+           )`,
+        [orgId, currentPeriod],
       ),
     ]);
 
@@ -103,6 +126,7 @@ export const dashboardRepository = {
       pending_payouts_kobo:          Number(pendingPayouts?.total_kobo ?? 0),
       active_members:                Number(members?.count ?? 0),
       total_transactions:            Number(ledger?.tx_count ?? 0),
+      deficit_member_count:          Number(deficitCount?.deficit_count ?? 0),
       period_month:                  currentPeriod,
     };
   },

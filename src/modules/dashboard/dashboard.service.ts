@@ -24,6 +24,7 @@ export const dashboardService = {
       total_collected_display: formatNaira(raw.total_collected_all_time_kobo),
       available_display:       formatNaira(raw.available_balance_kobo),
       pending_payouts_display: formatNaira(raw.pending_payouts_kobo),
+      deficit_member_count:    raw.deficit_member_count,
       // Collection rate this month vs last month
       trend: trend.map((t) => ({
         ...t,
