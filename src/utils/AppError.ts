@@ -64,7 +64,7 @@ export const Errors = {
     new AppError(msg, 500, false, 'INTERNAL_ERROR'),
 
   nombaError: (msg: string) =>
-    new AppError(`Nomba API error: ${msg}`, 502, false, 'NOMBA_ERROR'),
+    new AppError(`Nomba API error: ${msg}`, 502, true, 'NOMBA_ERROR'),
 
   payoutNotActionable: (status: string) =>
     new AppError(
