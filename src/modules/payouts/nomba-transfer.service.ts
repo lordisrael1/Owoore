@@ -2,7 +2,7 @@ import { nombaClient, nombaClientV2 } from '../../config/nomba';
 import { env } from '../../config/env';
 import { logger } from '../../utils/logger';
 import { AppError, Errors } from '../../utils/AppError';
-import { assertKobo } from '../../utils/kobo';
+import { assertKobo, fromKobo } from '../../utils/kobo';
 import { payoutTransferRef } from '../../utils/generateRefrence';
 //import { lookupBankAccount } from './bank-lookup.service';
 
@@ -102,7 +102,13 @@ export const nombaTransferService = {
       const response = await nombaClientV2.post(
         `/v2/transfers/bank/${env.NOMBA_SUB_ACCOUNT_ID}`,
         {
-          amount:        amountKobo,
+          // v2 transfer endpoint takes naira, unlike most other Nomba
+          // endpoints — confirmed against GET /v1/accounts/{id}/balance,
+          // which returns plain naira decimals (e.g. "360.0"), and by a
+          // live rejection: sending amountKobo directly (e.g. 10000 for
+          // ₦100) was read as ₦10,000 and rejected as INSUFFICIENT_BALANCE
+          // against a real ₦360 balance.
+          amount:        fromKobo(amountKobo),
           accountNumber,
           accountName,
           bankCode,
@@ -142,10 +148,14 @@ export const nombaTransferService = {
       // ── Handle non-success codes ──────────────────────────────────────
       // Same envelope as every other Nomba endpoint: { code, description, data }
       if (body.code !== '00') {
+        logger.error({
+          nomba_ref: merchantTxRef, http_status: httpStatus, full_response: body,
+        }, '[NombaTransfer] Transfer rejected — full response logged for diagnosis');
+
         throw new AppError(
           `Nomba transfer rejected: ${body.description ?? body.message ?? 'Unknown error'}`,
           502,
-          false,
+          true,
           'NOMBA_TRANSFER_REJECTED',
         );
       }

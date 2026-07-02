@@ -1,14 +1,20 @@
 /**
- * kobo.ts — ALL Nomba amounts must be in kobo (integer).
+ * kobo.ts — internally, ALL amounts in this codebase are kobo (integer).
  *
- * Nomba API rule: ₦1.00 = 100 kobo. Never send naira directly.
- * Sending 25 charges ₦0.25, not ₦25.
+ * ₦1.00 = 100 kobo. Never store or compute naira directly — always convert
+ * at the boundary.
  *
  * These two functions are the single conversion point in the codebase.
  * Import them everywhere amounts are handled — never do * 100 inline.
  *
- * Rule enforced in the Nomba build-week checklist:
- *   "All amounts converted to kobo before sending"
+ * CAVEAT — Nomba is NOT consistent about units across its own API:
+ *   - GET /v1/accounts/{id}/balance returns plain naira decimals (e.g. "360.0")
+ *   - POST /v2/transfers/bank/{subAccountId} also expects naira in `amount`
+ *     (confirmed live: sending a kobo integer here was read as 100x the
+ *     intended naira value and rejected as INSUFFICIENT_BALANCE)
+ *   Convert with fromKobo() immediately before building the request body
+ *   for those endpoints. Don't assume kobo just because it's a Nomba call —
+ *   verify per-endpoint before using amountKobo directly on the wire.
  */
 
 /**
