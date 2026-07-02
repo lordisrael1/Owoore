@@ -146,8 +146,12 @@ export const nombaTransferService = {
       }
 
       // ── Handle non-success codes ──────────────────────────────────────
-      // Same envelope as every other Nomba endpoint: { code, description, data }
-      if (body.code !== '00') {
+      // Unlike v1 endpoints, this v2 endpoint does NOT use code: '00' for
+      // success — confirmed live: a genuinely successful/processing accept
+      // came back as { code: '200', status: true, description: 'PROCESSING',
+      // data: { status: 'PENDING_BILLING', ... } }. The boolean `status`
+      // field is the real success indicator here.
+      if (body.status !== true) {
         logger.error({
           nomba_ref: merchantTxRef, http_status: httpStatus, full_response: body,
         }, '[NombaTransfer] Transfer rejected — full response logged for diagnosis');
