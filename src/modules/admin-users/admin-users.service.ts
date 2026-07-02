@@ -6,7 +6,7 @@ import { hashToken } from '../../utils/crypto';
 import { Errors } from '../../utils/AppError';
 import { logger } from '../../utils/logger';
 import { env } from '../../config/env';
-import { resend, FROM_ADDRESS } from '../../config/resend';
+import { emailService } from '../../notifications/email/email.service';
 
 const INVITE_EXPIRY_HOURS = 72;
 
@@ -206,12 +206,17 @@ export const adminUserService = {
 </body></html>`;
 
     try {
-      await resend.emails.send({
-        from:    FROM_ADDRESS,
+      // Must throw on failure — Resend's SDK resolves with { error } instead
+      // of rejecting for most API-level failures (unverified sender, bad
+      // recipient, rate limits, etc). Calling resend.emails.send() directly
+      // here previously ignored that `error` field, so a rejected send
+      // looked identical to a successful one and this whole catch block
+      // was dead code.
+      await emailService.send({
         to,
         subject: `You're invited to ${orgName} on Owoore`,
         html,
-      });
+      }, true);
     } catch (err: any) {
       logger.error({ to: to.slice(0, 3) + '***', err: err.message },
         '[AdminUsers] Failed to send invite email');
