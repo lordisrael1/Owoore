@@ -93,18 +93,21 @@ describe('POST /api/v1/auth/admin/login', () => {
 });
 
 describe('POST /api/v1/auth/refresh', () => {
-  it('rejects request without Bearer token', async () => {
-    const res = await request(app)
-      .post('/api/v1/auth/refresh');
-
-    expect(res.status).toBe(401);
-  });
-
-  it('rejects invalid token', async () => {
+  it('rejects missing refresh token', async () => {
     const res = await request(app)
       .post('/api/v1/auth/refresh')
-      .set('Authorization', 'Bearer invalidtoken123');
+      .send({});
+
+    expect(res.status).toBe(422);
+    expect(res.body.success).toBe(false);
+  });
+
+  it('rejects a refresh token that does not exist', async () => {
+    const res = await request(app)
+      .post('/api/v1/auth/refresh')
+      .send({ token: 'nonexistent-refresh-token' });
 
     expect(res.status).toBe(401);
+    expect(res.body.success).toBe(false);
   });
 });

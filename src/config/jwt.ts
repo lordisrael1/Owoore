@@ -69,15 +69,3 @@ export function isMemberToken(payload: TokenPayload): payload is MemberTokenPayl
 export function isAdminToken(payload: TokenPayload): payload is AdminTokenPayload {
   return ['ADMIN', 'TREASURER', 'SIGNATORY'].includes(payload.role);
 }
-
-// ── Refresh ────────────────────────────────────────────────────────────────
-
-/**
- * refreshMemberToken — issues a new token from an existing valid payload.
- * Called by POST /auth/refresh. We re-verify before re-issuing.
- */
-export function refreshMemberToken(existingToken: string): string {
-  const payload = verifyToken(existingToken) as MemberTokenPayload;
-  const { iat, exp, ...clean } = payload;
-  return signMemberToken(clean);
-}

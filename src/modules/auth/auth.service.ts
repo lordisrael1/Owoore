@@ -1,8 +1,9 @@
 import { queryOne } from '../../db';
-import { signMemberToken, refreshMemberToken } from '../../config/jwt';
+import { signMemberToken } from '../../config/jwt';
 import { memberCode } from '../../utils/generateRefrence';
 import { normaliseEmail, maskEmail } from '../../utils/email';
 import { otpService } from './otp.service';
+import { refreshTokenService } from './refresh-token.service';
 import { emailService } from '../../notifications/email/email.service';
 import { logger } from '../../utils/logger';
 import { Errors } from '../../utils/AppError';
@@ -40,7 +41,9 @@ export const authService = {
     orgSlug: string,
     name:    string,
   ): Promise<{
-    token:  string;
+    token:        string;
+    refreshToken: string;
+    refreshTokenExpiresAt: Date;
     member: { id: string; name: string; email: string; memberCode: string; orgId: string; orgSlug: string; isNew: boolean };
   }> {
     const normalisedEmail = normaliseEmail(email);
@@ -102,8 +105,13 @@ export const authService = {
       role:  'MEMBER',
     });
 
+    const { rawToken: refreshToken, expiresAt: refreshTokenExpiresAt } =
+      await refreshTokenService.issue(member!.id);
+
     return {
       token,
+      refreshToken,
+      refreshTokenExpiresAt,
       member: {
         id:         member!.id,
         name:       member!.display_name,
@@ -116,9 +124,39 @@ export const authService = {
     };
   },
 
-  async refresh(existingToken: string): Promise<{ token: string }> {
-    const newToken = refreshMemberToken(existingToken);
-    return { token: newToken };
+  /**
+   * refreshSession — exchanges a valid, unexpired refresh token for a new
+   * access token + a freshly rotated refresh token.
+   *
+   * Unlike the old implementation, this never re-verifies the (possibly
+   * expired) access token — the refresh token is its own independent,
+   * DB-tracked credential, so a session can be silently renewed even after
+   * the access token has expired.
+   */
+  async refresh(rawRefreshToken: string): Promise<{
+    token: string;
+    refreshToken: string;
+    refreshTokenExpiresAt: Date;
+  }> {
+    const { memberId } = await refreshTokenService.verify(rawRefreshToken);
+
+    const member = await queryOne<{ id: string; org_id: string; email: string }>(
+      `SELECT id, org_id, email FROM members WHERE id = $1 AND is_active = TRUE`,
+      [memberId],
+    );
+    if (!member) throw Errors.unauthorized('Account no longer active. Please log in again.');
+
+    const token = signMemberToken({
+      sub:   member.id,
+      orgId: member.org_id,
+      email: member.email,
+      role:  'MEMBER',
+    });
+
+    const { rawToken: refreshToken, expiresAt: refreshTokenExpiresAt } =
+      await refreshTokenService.issue(member.id);
+
+    return { token, refreshToken, refreshTokenExpiresAt };
   },
 
   async deliverOtp(email: string, code: string, churchName: string): Promise<void> {

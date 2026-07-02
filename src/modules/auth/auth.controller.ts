@@ -25,14 +25,9 @@ export const authController = {
     res.json({ success: true, data: result });
   }),
 
-  // POST /auth/refresh
+  // POST /auth/refresh — exchanges a refresh token for a new access token
   refresh: catchAsync(async (req: Request, res: Response) => {
-    const authHeader = req.headers.authorization;
-    if (!authHeader?.startsWith('Bearer ')) {
-      res.status(401).json({ success: false, error: { message: 'No token provided' } });
-      return;
-    }
-    const token  = authHeader.slice(7);
+    const { token } = req.body;
     const result = await authService.refresh(token);
     res.json({ success: true, data: result });
   }),
