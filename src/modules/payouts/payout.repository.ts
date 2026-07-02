@@ -49,9 +49,19 @@ export const payoutRepository = {
     return row!;
   },
 
-  async findById(id: string, org_id: string): Promise<PayoutRequest | null> {
-    return queryOne<PayoutRequest>(
-      `SELECT * FROM payout_requests WHERE id = $1 AND org_id = $2`,
+  async findById(id: string, org_id: string): Promise<PayoutRequest & {
+    account_number: string | null;
+    bank_name:      string | null;
+    recipient_name: string | null;
+  } | null> {
+    return queryOne(
+      `SELECT pr.*,
+              oba.account_number,
+              oba.bank_name,
+              oba.account_name AS recipient_name
+       FROM payout_requests pr
+       LEFT JOIN org_bank_accounts oba ON oba.id = pr.bank_account_id
+       WHERE pr.id = $1 AND pr.org_id = $2`,
       [id, org_id],
     );
   },
