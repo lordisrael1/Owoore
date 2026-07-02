@@ -25,6 +25,13 @@ export const authController = {
     res.json({ success: true, data: result });
   }),
 
+  // POST /auth/admin/verify-email
+  verifyAdminEmail: catchAsync(async (req: Request, res: Response) => {
+    const { email, code, org_slug } = req.body;
+    const result = await adminAuthService.verifyEmail(email, code, org_slug);
+    res.json({ success: true, data: result });
+  }),
+
   // POST /auth/refresh — exchanges a refresh token for a new access token
   refresh: catchAsync(async (req: Request, res: Response) => {
     const { token } = req.body;

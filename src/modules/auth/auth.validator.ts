@@ -17,6 +17,12 @@ export const adminLoginSchema = z.object({
   password: z.string().min(1, 'Password is required'),
 });
 
+export const verifyAdminEmailSchema = z.object({
+  email:    z.string().email('Enter a valid email address'),
+  code:     z.string().length(6, 'OTP must be 6 digits').regex(/^\d{6}$/, 'OTP must be numeric'),
+  org_slug: z.string().min(1, 'org_slug is required'),
+});
+
 export const refreshTokenSchema = z.object({
   token: z.string().min(1, 'Token is required'),
 });

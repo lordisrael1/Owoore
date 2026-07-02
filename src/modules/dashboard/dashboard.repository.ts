@@ -92,25 +92,20 @@ export const dashboardRepository = {
         [orgId],
       ),
       queryOne<{ deficit_count: string }>(
-        `SELECT COUNT(*)::TEXT AS deficit_count
+        `SELECT COUNT(DISTINCT m.id)::TEXT AS deficit_count
          FROM members m
-         CROSS JOIN fund_types ft
+         JOIN fund_types ft
+           ON ft.org_id = $1 AND ft.is_active = TRUE AND ft.expected_amt_kobo IS NOT NULL
          LEFT JOIN member_fund_accounts mfa
            ON mfa.member_id = m.id AND mfa.fund_type_id = ft.id
          LEFT JOIN (
            SELECT member_fund_account_id,
-                  COUNT(*)::INT              AS tx_count,
                   COALESCE(SUM(amount_kobo), 0)::BIGINT AS paid_kobo
            FROM transactions WHERE period_month = $2
            GROUP BY member_fund_account_id
          ) t ON t.member_fund_account_id = mfa.id
          WHERE m.org_id = $1 AND m.is_active = TRUE
-           AND ft.org_id = $1 AND ft.is_active = TRUE
-           AND (
-             COALESCE(t.tx_count, 0) = 0
-             OR (ft.expected_amt_kobo IS NOT NULL
-                 AND COALESCE(t.paid_kobo, 0) < ft.expected_amt_kobo)
-           )`,
+           AND COALESCE(t.paid_kobo, 0) < ft.expected_amt_kobo`,
         [orgId, currentPeriod],
       ),
     ]);
@@ -178,6 +173,7 @@ export const dashboardRepository = {
          ON t.member_fund_account_id = mfa.id AND t.period_month = $2
        WHERE m.org_id = $1 AND m.is_active = TRUE AND ft.org_id = $1 AND ft.is_active = TRUE
        GROUP BY m.id, m.display_name, m.member_code, ft.id, ft.name, ft.expected_amt_kobo
+       HAVING COUNT(t.id) > 0 OR ft.expected_amt_kobo IS NOT NULL
        ORDER BY m.display_name ASC, ft.sort_order ASC`,
       [orgId, currentPeriod],
     );

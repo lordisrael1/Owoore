@@ -4,6 +4,7 @@ import { Errors } from '../../utils/AppError';
 import { generateUniqueSlug } from '../../utils/slug';
 import { orgRepository } from './org.repository';
 import { adminAuthService } from '../auth/admin-auth.service';
+import { authService } from '../auth/auth.service';
 import { withTransaction } from '../../db';
 
 export const orgService = {
@@ -19,7 +20,7 @@ export const orgService = {
     logoUrl?:      string;
   }): Promise<{
     org:   { id: string; name: string; slug: string };
-    admin: { id: string; email: string; role: string };
+    admin: { id: string; email: string; role: string; is_verified: boolean };
     joinLink: string;
   }> {
     const { name, adminName, adminEmail, adminPassword, logoUrl } = input;
@@ -73,9 +74,19 @@ export const orgService = {
 
     logger.info({ org_id: org.id, slug }, '[OrgService] Church registered successfully');
 
+    // Org + admin are already committed — a delivery hiccup here shouldn't
+    // fail the whole registration. The admin can always request a fresh
+    // code via the existing POST /auth/send-otp.
+    try {
+      await authService.sendOtp(adminEmail, slug);
+    } catch (err: any) {
+      logger.warn({ org_id: org.id, err: err.message },
+        '[OrgService] Failed to send initial verification OTP — admin can request a new one');
+    }
+
     return {
       org:      { id: org.id, name: org.name, slug: org.slug },
-      admin:    { id: admin.id, email: admin.email, role: admin.role },
+      admin:    { id: admin.id, email: admin.email, role: admin.role, is_verified: false },
       joinLink,
     };
   },

@@ -79,4 +79,12 @@ export const Errors = {
 
   tokenUsed: () =>
     new AppError('This approval link has already been used.', 410, true, 'TOKEN_USED'),
+
+  emailNotVerified: () =>
+    new AppError(
+      'Please verify your email before logging in.',
+      403,
+      true,
+      'EMAIL_NOT_VERIFIED',
+    ),
 } as const;

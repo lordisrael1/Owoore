@@ -7,6 +7,7 @@ export interface AdminUserRow {
   email:                   string;
   role:                    string;
   is_active:               boolean;
+  is_verified:             boolean;
   invite_token_hash:       string | null;
   invite_token_expires_at: Date | null;
   invited_by:              string | null;
@@ -16,7 +17,7 @@ export interface AdminUserRow {
 export const adminUserRepository = {
   async findByOrgAndEmail(orgId: string, email: string): Promise<AdminUserRow | null> {
     return queryOne<AdminUserRow>(
-      `SELECT id, org_id, name, email, role, is_active,
+      `SELECT id, org_id, name, email, role, is_active, is_verified,
               invite_token_hash, invite_token_expires_at, invited_by, bcrypt_hash
        FROM admin_users
        WHERE org_id = $1 AND LOWER(email) = LOWER($2)`,
@@ -26,7 +27,7 @@ export const adminUserRepository = {
 
   async findByInviteTokenHash(tokenHash: string): Promise<AdminUserRow | null> {
     return queryOne<AdminUserRow>(
-      `SELECT id, org_id, name, email, role, is_active,
+      `SELECT id, org_id, name, email, role, is_active, is_verified,
               invite_token_hash, invite_token_expires_at, invited_by, bcrypt_hash
        FROM admin_users
        WHERE invite_token_hash = $1`,
@@ -55,15 +56,25 @@ export const adminUserRepository = {
   },
 
   async activateWithPassword(id: string, bcryptHash: string): Promise<void> {
+    // Clicking the emailed invite link already proves ownership of the
+    // mailbox — no separate OTP verification needed for invited users.
     await queryOne(
       `UPDATE admin_users
        SET bcrypt_hash = $2,
            is_active = TRUE,
+           is_verified = TRUE,
            invite_token_hash = NULL,
            invite_token_expires_at = NULL,
            updated_at = NOW()
        WHERE id = $1`,
       [id, bcryptHash],
+    );
+  },
+
+  async markVerified(id: string): Promise<void> {
+    await queryOne(
+      `UPDATE admin_users SET is_verified = TRUE, updated_at = NOW() WHERE id = $1`,
+      [id],
     );
   },
 
