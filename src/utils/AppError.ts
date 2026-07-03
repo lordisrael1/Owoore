@@ -15,17 +15,20 @@ export class AppError extends Error {
   public readonly statusCode: number;
   public readonly isOperational: boolean;
   public readonly code?: string;
+  public readonly details?: Record<string, unknown>;
 
   constructor(
     message: string,
     statusCode: number = 500,
     isOperational: boolean = true,
     code?: string,
+    details?: Record<string, unknown>,
   ) {
     super(message);
     this.statusCode = statusCode;
     this.isOperational = isOperational;
     this.code = code;
+    this.details = details;
 
     // Maintains proper stack trace in V8
     Error.captureStackTrace(this, this.constructor);
@@ -80,11 +83,12 @@ export const Errors = {
   tokenUsed: () =>
     new AppError('This approval link has already been used.', 410, true, 'TOKEN_USED'),
 
-  emailNotVerified: () =>
+  emailNotVerified: (orgSlug?: string) =>
     new AppError(
       'Please verify your email before logging in.',
       403,
       true,
       'EMAIL_NOT_VERIFIED',
+      orgSlug ? { orgSlug } : undefined,
     ),
 } as const;

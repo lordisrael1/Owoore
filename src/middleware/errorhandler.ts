@@ -39,6 +39,7 @@ export function errorHandler(
       error: {
         code:    err.code ?? 'ERROR',
         message: err.message,
+        ...(err.details && { details: err.details }),
       },
     });
     return;

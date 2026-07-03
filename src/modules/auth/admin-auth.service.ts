@@ -67,7 +67,7 @@ export const adminAuthService = {
 
     // Password is correct, but they haven't proven ownership of the email
     // yet (self-registered and never completed OTP verification).
-    if (!admin.is_verified) throw Errors.emailNotVerified();
+    if (!admin.is_verified) throw Errors.emailNotVerified(admin.org_slug);
 
     // Update last_login_at
     await queryOne(
