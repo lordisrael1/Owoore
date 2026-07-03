@@ -18,7 +18,7 @@ export const fundController = {
 
     const fund = await fundService.create(user.orgId, {
       name, kind, description, expected_amt, expires_at,
-    });
+    }, { id: user.sub, email: user.email });
 
     res.status(201).json({ success: true, data: fund });
   }),

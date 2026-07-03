@@ -234,4 +234,30 @@ export const dashboardRepository = {
       [orgId, months],
     );
   },
+
+  /**
+   * getActivity — recent audit_log rows for the activity feed.
+   * metadata is self-contained (names, amounts) so no joins needed —
+   * events stay renderable even if the referenced entity is deleted.
+   */
+  async getActivity(orgId: string, limit = 15): Promise<Array<{
+    id:          string;
+    actor_type:  string;
+    actor_email: string | null;
+    action:      string;
+    entity_type: string;
+    entity_id:   string | null;
+    metadata:    Record<string, unknown> | null;
+    created_at:  Date;
+  }>> {
+    return queryMany(
+      `SELECT id, actor_type, actor_email, action,
+              entity_type, entity_id, metadata, created_at
+       FROM audit_log
+       WHERE org_id = $1
+       ORDER BY created_at DESC
+       LIMIT $2`,
+      [orgId, limit],
+    );
+  },
 };

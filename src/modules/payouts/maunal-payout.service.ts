@@ -8,6 +8,7 @@ import { payoutRepository } from './payout.repository';
 import { payoutTransferRef } from '../../utils/generateRefrence';
 import { assertTransition } from './payout-state.machine';
 import { currentPeriod } from '../../utils/formatMoney';
+import { auditService } from '../audit/audit.service';
 
 /**
  * manual-payout.service.ts
@@ -113,6 +114,21 @@ export const manualPayoutService = {
       amount_kobo:     amountKobo,
       merchant_tx_ref: nombaRef,
     }, '[ManualPayout] Transfer initiated — awaiting webhook confirmation');
+
+    await auditService.record({
+      org_id:      orgId,
+      actor_type:  'ADMIN',
+      actor_id:    initiatedBy,
+      action:      'PAYOUT_INITIATED',
+      entity_type: 'payout_request',
+      entity_id:   payout.id,
+      metadata: {
+        amount_kobo:  amountKobo,
+        purpose,
+        path:         'MANUAL',
+        account_name: lookup.accountName,
+      },
+    });
 
     return { payoutRequestId: payout.id, nombaTransferRef: nombaRef };
   },

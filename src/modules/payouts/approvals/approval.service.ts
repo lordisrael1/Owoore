@@ -13,6 +13,7 @@ import { verifyPhoneLast4 } from '../../../utils/crypto';
 import { formatNaira } from '../../../utils/formatMoney';
 import { env } from '../../../config/env';
 import { resend, FROM_ADDRESS, EMAIL_SUBJECTS } from '../../../config/resend';
+import { auditService } from '../../audit/audit.service';
 
 /**
  * approval.service.ts
@@ -123,6 +124,24 @@ export const approvalPayoutService = {
       min_approvers: minApprovers,
     }, '[ApprovalService] Multi-approver payout initiated — emails sent');
 
+    await auditService.record({
+      org_id:      orgId,
+      actor_type:  'ADMIN',
+      actor_id:    initiatedBy,
+      actor_email: initiator?.email,
+      action:      'PAYOUT_INITIATED',
+      entity_type: 'payout_request',
+      entity_id:   payout.id,
+      metadata: {
+        amount_kobo:    amountKobo,
+        purpose,
+        path:           'MULTI_APPROVER',
+        approver_count: emailsSent,
+        min_approvers:  minApprovers,
+        initiator_name: initiator?.name,
+      },
+    });
+
     return { payoutRequestId: payout.id, approverCount: emailsSent };
   },
 
@@ -230,7 +249,10 @@ export const approvalPayoutService = {
     }
 
     // 4. Fetch payout and validate status
-    const payout = await payoutRepository.findById(tokenRecord.payout_request_id, '');
+    // No org scoping here — the flow is token-authenticated and the token
+    // already binds to one payout. (findById with '' as org_id fails the
+    // Postgres UUID cast and 500s every approval action.)
+    const payout = await payoutRepository.findByIdAnyOrg(tokenRecord.payout_request_id);
     if (!payout) throw Errors.notFound('Payout request');
 
     if (!['PENDING', 'PARTIAL'].includes(payout.status)) {
@@ -260,6 +282,21 @@ export const approvalPayoutService = {
         signatory:    signatory.name,
       }, '[ApprovalService] Payout DECLINED — funds unlocked');
 
+      await auditService.record({
+        org_id:      payout.org_id,
+        actor_type:  'SIGNATORY',
+        actor_id:    tokenRecord.signatory_id,
+        action:      'PAYOUT_DECLINED',
+        entity_type: 'payout_request',
+        entity_id:   payout.id,
+        metadata: {
+          amount_kobo:    payout.amount_kobo,
+          purpose:        payout.purpose,
+          signatory_name: signatory.name,
+          ip_address:     ipAddress,
+        },
+      });
+
       return { status: 'DECLINED', message: 'You have declined this payout request.' };
     }
 
@@ -286,6 +323,23 @@ export const approvalPayoutService = {
         approvals_needed: quorum.approvalsNeeded,
       }, '[ApprovalService] Approval recorded — quorum not yet reached');
 
+      await auditService.record({
+        org_id:      payout.org_id,
+        actor_type:  'SIGNATORY',
+        actor_id:    tokenRecord.signatory_id,
+        action:      'PAYOUT_APPROVAL_RECORDED',
+        entity_type: 'payout_request',
+        entity_id:   payout.id,
+        metadata: {
+          amount_kobo:      payout.amount_kobo,
+          purpose:          payout.purpose,
+          signatory_name:   signatory.name,
+          approvals_in:     quorum.approvalsIn,
+          approvals_needed: quorum.approvalsNeeded,
+          ip_address:       ipAddress,
+        },
+      });
+
       return {
         status:  'PARTIAL',
         message: `Approval recorded. ${quorum.approvalsNeeded - quorum.approvalsIn} more approval(s) needed.`,
@@ -297,6 +351,22 @@ export const approvalPayoutService = {
 
     assertTransition(payout.status, 'APPROVED');
     await payoutRepository.updateStatus(payout.id, 'APPROVED');
+
+    await auditService.record({
+      org_id:      payout.org_id,
+      actor_type:  'SIGNATORY',
+      actor_id:    tokenRecord.signatory_id,
+      action:      'PAYOUT_APPROVED',
+      entity_type: 'payout_request',
+      entity_id:   payout.id,
+      metadata: {
+        amount_kobo:    payout.amount_kobo,
+        purpose:        payout.purpose,
+        signatory_name: signatory.name,
+        approvals_in:   quorum.approvalsIn,
+        ip_address:     ipAddress,
+      },
+    });
 
     // Fetch bank account details for transfer
     const bankAccount = await queryOne<{

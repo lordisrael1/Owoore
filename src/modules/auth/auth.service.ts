@@ -8,6 +8,7 @@ import { emailService } from '../../notifications/email/email.service';
 import { logger } from '../../utils/logger';
 import { Errors } from '../../utils/AppError';
 import { env } from '../../config/env';
+import { auditService } from '../audit/audit.service';
 
 export const authService = {
   async sendOtp(email: string, orgSlug: string): Promise<{ message: string }> {
@@ -91,6 +92,21 @@ export const authService = {
 
       isNew = true;
       logger.info({ org_id: org.id, member_code: mCode }, '[Auth] New member registered');
+
+      await auditService.record({
+        org_id:      org.id,
+        actor_type:  'MEMBER',
+        actor_id:    member!.id,
+        actor_email: normalisedEmail,
+        action:      'MEMBER_JOINED',
+        entity_type: 'member',
+        entity_id:   member!.id,
+        metadata: {
+          display_name: name.trim(),
+          member_code:  mCode,
+          org_slug:     orgSlug,
+        },
+      });
     } else {
       logger.info({ member_id: member.id }, '[Auth] Existing member verified');
     }

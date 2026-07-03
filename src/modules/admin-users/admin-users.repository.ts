@@ -89,4 +89,28 @@ export const adminUserRepository = {
       [id, tokenHash, expiresAt],
     );
   },
+
+  /**
+   * getOrCreateSystemActor — designated per-org system account used as
+   * initiated_by on system-generated payouts (auto-sweeps).
+   *
+   * payout_requests.initiated_by is NOT NULL REFERENCES admin_users(id),
+   * so system flows need a real row to attribute to. This account can
+   * never log in: bcrypt_hash is NULL and is_active is FALSE. Role
+   * 'SYSTEM' keeps it distinguishable from human ADMIN/TREASURER rows.
+   *
+   * Idempotent via the UNIQUE(org_id, email) constraint — the DO UPDATE
+   * no-op lets RETURNING work on the existing row.
+   */
+  async getOrCreateSystemActor(orgId: string): Promise<string> {
+    const row = await queryOne<{ id: string }>(
+      `INSERT INTO admin_users
+         (org_id, name, email, role, is_active, is_verified, created_at, updated_at)
+       VALUES ($1, 'Owoore System', 'system@owoore.internal', 'SYSTEM', FALSE, TRUE, NOW(), NOW())
+       ON CONFLICT (org_id, email) DO UPDATE SET updated_at = admin_users.updated_at
+       RETURNING id`,
+      [orgId],
+    );
+    return row!.id;
+  },
 };

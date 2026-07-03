@@ -18,5 +18,6 @@ router.get('/summary',        dashboardController.getSummary);
 router.get('/fund-breakdown', dashboardController.getFundBreakdown);
 router.get('/member-status',  dashboardController.getMemberStatus);
 router.get('/payout-history', dashboardController.getPayoutHistory);
+router.get('/activity',       dashboardController.getActivity);
 
 export default router;

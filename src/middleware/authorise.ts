@@ -53,7 +53,10 @@ export function requireRole(allowedRoles: Role[]) {
  */
 export function scopeToOrg(req: Request, _res: Response, next: NextFunction): void {
   const user = (req as any).user;
-  const routeOrgId = req.params.orgId;
+  // The org router names its param :id (PATCH /orgs/:id) while nested
+  // mounts use :orgId — check both, otherwise the guard silently skips
+  // and any admin can modify any other church.
+  const routeOrgId = req.params.orgId ?? req.params.id;
 
   if (!user) return next(Errors.unauthorized());
 

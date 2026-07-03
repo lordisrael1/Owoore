@@ -321,6 +321,21 @@ export const nombaTransferService = {
       nomba_ref:   merchantTxRef,
       amount_kobo: payout.amount_kobo,
     }, '[NombaTransfer] Payout TRANSFERRED — ledger debited');
+
+    const { auditService } = await import('../audit/audit.service');
+    await auditService.record({
+      org_id:      payout.org_id,
+      actor_type:  'SYSTEM',
+      action:      'PAYOUT_TRANSFERRED',
+      entity_type: 'payout_request',
+      entity_id:   payout.id,
+      metadata: {
+        amount_kobo:        payout.amount_kobo,
+        purpose:            payout.purpose,
+        nomba_transfer_ref: merchantTxRef,
+        nomba_transfer_id:  nombaTransferId,
+      },
+    });
   },
 
   /**
@@ -389,6 +404,21 @@ export const nombaTransferService = {
       amount_kobo: payout.amount_kobo,
       reason,
     }, '[NombaTransfer] Payout FAILED — soft lock released, funds available for retry');
+
+    const { auditService } = await import('../audit/audit.service');
+    await auditService.record({
+      org_id:      payout.org_id,
+      actor_type:  'SYSTEM',
+      action:      'PAYOUT_TRANSFER_FAILED',
+      entity_type: 'payout_request',
+      entity_id:   payout.id,
+      metadata: {
+        amount_kobo:        payout.amount_kobo,
+        purpose:            payout.purpose,
+        nomba_transfer_ref: merchantTxRef,
+        reason,
+      },
+    });
 
     // NOTE: On retry, the admin calls POST /payouts again.
     // payout.service.ts reuses the same payout_request_id → same merchantTxRef

@@ -66,6 +66,20 @@ export const payoutRepository = {
     );
   },
 
+  /**
+   * findByIdAnyOrg — unscoped lookup for token-authenticated flows.
+   *
+   * The approval flow authenticates via the signatory's token, not a JWT,
+   * so there is no org context to scope by — the token itself already
+   * binds to exactly one payout_request row.
+   */
+  async findByIdAnyOrg(id: string): Promise<PayoutRequest | null> {
+    return queryOne<PayoutRequest>(
+      `SELECT * FROM payout_requests WHERE id = $1`,
+      [id],
+    );
+  },
+
   async findByTransferRef(nomba_transfer_ref: string): Promise<PayoutRequest | null> {
     return queryOne<PayoutRequest>(
       `SELECT * FROM payout_requests WHERE nomba_transfer_ref = $1`,

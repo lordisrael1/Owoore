@@ -7,6 +7,7 @@ import { Errors } from '../../utils/AppError';
 import { logger } from '../../utils/logger';
 import { env } from '../../config/env';
 import { emailService } from '../../notifications/email/email.service';
+import { auditService } from '../audit/audit.service';
 
 const INVITE_EXPIRY_HOURS = 72;
 
@@ -69,6 +70,21 @@ export const adminUserService = {
       role,
       invited_by: invitedBy,
     }, '[AdminUsers] Invite sent');
+
+    await auditService.record({
+      org_id:      orgId,
+      actor_type:  'ADMIN',
+      actor_id:    invitedBy,
+      action:      'ADMIN_INVITED',
+      entity_type: 'admin_user',
+      entity_id:   adminUserId,
+      metadata: {
+        invitee_name:  name,
+        invitee_email: email,
+        role,
+        org_name:      org.name,
+      },
+    });
 
     return { adminUserId, email };
   },

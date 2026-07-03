@@ -1,6 +1,7 @@
 import { fundRepository } from './fund.repository'
 import { Errors } from '../../utils/AppError';
 import { logger } from '../../utils/logger';
+import { auditService } from '../audit/audit.service';
 
 /**
  * fund.service.ts
@@ -21,7 +22,7 @@ export const fundService = {
     description?:  string;
     expected_amt?: number;
     expires_at?:   string;
-  }) {
+  }, actor?: { id: string; email?: string }) {
     // Check name uniqueness within this org
     const existing = await fundRepository.findAllForOrg(orgId, false);
     const nameTaken = existing.some(
@@ -50,6 +51,21 @@ export const fundService = {
 
     logger.info({ org_id: orgId, fund_id: fund.id, name: fund.name, kind: fund.kind },
       '[FundService] Fund type created');
+
+    await auditService.record({
+      org_id:      orgId,
+      actor_type:  'ADMIN',
+      actor_id:    actor?.id,
+      actor_email: actor?.email,
+      action:      'FUND_CREATED',
+      entity_type: 'fund_type',
+      entity_id:   fund.id,
+      metadata: {
+        fund_name:  fund.name,
+        kind:       fund.kind,
+        expires_at: input.expires_at,
+      },
+    });
 
     return fund;
   },

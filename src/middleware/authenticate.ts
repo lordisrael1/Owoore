@@ -9,20 +9,24 @@ import { Errors } from '../utils/AppError';
  * Works for both member tokens and admin tokens — the payload's
  * `role` field distinguishes them.
  *
+ * Falls back to a `?token=` query param when there's no Authorization
+ * header — needed for CSV/file downloads triggered via window.open()
+ * or <a> navigation, which can't set custom request headers.
+ *
  * Throws 401 if:
- *   - No Authorization header
+ *   - No Authorization header or token query param
  *   - Token is malformed
  *   - Token is expired
  *   - Token signature is invalid
  */
 export function authenticate(req: Request, _res: Response, next: NextFunction): void {
   const authHeader = req.headers.authorization;
+  const headerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : undefined;
+  const token = headerToken ?? (req.query.token as string | undefined);
 
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  if (!token) {
     return next(Errors.unauthorized('No token provided. Include Authorization: Bearer <token>'));
   }
-
-  const token = authHeader.slice(7);
 
   try {
     const payload = verifyToken(token);

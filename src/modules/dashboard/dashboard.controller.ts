@@ -29,4 +29,11 @@ export const dashboardController = {
     const data  = await dashboardService.getPayoutHistory(user.orgId, limit);
     res.json({ success: true, data });
   }),
+
+  getActivity: catchAsync(async (req: Request, res: Response) => {
+    const user  = (req as any).user;
+    const limit = Math.min(Number(req.query.limit ?? 15), 50);
+    const data  = await dashboardService.getActivity(user.orgId, limit);
+    res.json({ success: true, data });
+  }),
 };

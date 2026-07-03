@@ -1,11 +1,12 @@
-import { queryMany } from '../../db';
+import { query, queryMany } from '../../db';
 import { logger } from '../../utils/logger';
 import { ledgerService } from '../transactions/ledger.service';
 import { nombaTransferService } from './nomba-transfer.service';
 import { lookupBankAccount } from './bank-lookup.service';
 import { payoutRepository } from './payout.repository';
-//import { currentPeriod } from '../../utils/formatMoney';
-//import { payoutTransferRef } from '../../utils/generateReference';
+import { assertTransition } from './payout-state.machine';
+import { adminUserRepository } from '../admin-users/admin-users.repository';
+import { auditService } from '../audit/audit.service';
 
 /**
  * sweep.service.ts — auto-sweep: check schedule, check min balance, fire transfer.
@@ -111,20 +112,26 @@ export const sweepService = {
     const lookup = await lookupBankAccount(bank_code, account_number);
 
     // 3. Create payout record — APPROVED immediately (auto-sweep bypasses approval)
+    // initiated_by is NOT NULL REFERENCES admin_users(id), so system flows
+    // attribute to the org's designated system actor (can never log in)
+    const systemActorId = await adminUserRepository.getOrCreateSystemActor(org_id);
+
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
     const payout = await payoutRepository.create({
       org_id, fund_type_id, bank_account_id,
-      initiated_by: 'system',  // system-initiated
+      initiated_by: systemActorId,
       amount_kobo:  amountKobo,
       purpose:      `Auto-sweep — ${fund_name} — ${new Date().toLocaleDateString('en-NG')}`,
       expires_at:   expiresAt,
     });
 
+    assertTransition('PENDING', 'APPROVED');
     await payoutRepository.updateStatus(payout.id, 'APPROVED');
     await ledgerService.softLock({ org_id, fund_type_id, amountKobo });
 
     // Mark TRANSFERRING before firing — so a failed/thrown call below is always
     // recoverable (TRANSFERRING → FAILED is valid; APPROVED has no FAILED path)
+    assertTransition('APPROVED', 'TRANSFERRING');
     await payoutRepository.updateStatus(payout.id, 'TRANSFERRING');
 
     // 4. Fire Nomba transfer
@@ -156,7 +163,7 @@ export const sweepService = {
     });
 
     // 5. Update last_swept_at
-    await queryMany(
+    await query(
       `UPDATE sweep_configs SET last_swept_at = NOW() WHERE id = $1`,
       [config.id],
     );
@@ -167,5 +174,22 @@ export const sweepService = {
       fund_name,
       amount_kobo:  amountKobo,
     }, '[Sweep] Auto-sweep transfer initiated');
+
+    await auditService.record({
+      org_id,
+      actor_type:  'SYSTEM',
+      actor_id:    systemActorId,
+      action:      'PAYOUT_INITIATED',
+      entity_type: 'payout_request',
+      entity_id:   payout.id,
+      metadata: {
+        amount_kobo:        amountKobo,
+        purpose:            `Auto-sweep — ${fund_name}`,
+        path:               'AUTO_SWEEP',
+        fund_name,
+        account_name:       lookup.accountName,
+        nomba_transfer_ref: transfer.nombaTransferRef,
+      },
+    });
   },
 };

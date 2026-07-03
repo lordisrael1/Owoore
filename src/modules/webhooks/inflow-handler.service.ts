@@ -4,6 +4,7 @@ import { currentPeriod } from '../../utils/formatMoney';
 import { reconciliationService } from '../transactions/reconciliation.service';
 import { ledgerService } from '../transactions/ledger.service';
 import { notificationDispatcher } from './notification.dispatcher';
+import { auditService } from '../audit/audit.service';
 
 /**
  * inflow-handler.service.ts
@@ -145,16 +146,17 @@ export const inflowHandlerService = {
     const period = currentPeriod();
 
     // 3-5. Atomic: write transaction + update ledger
-    await withTransaction(async (client) => {
+    const { transactionId } = await withTransaction(async (client) => {
       // Write transaction record
-      await client.query(
+      const txResult = await client.query<{ id: string }>(
         `INSERT INTO transactions (
            member_fund_account_id, member_id, fund_type_id, org_id,
            amount_kobo, expected_amt_kobo, variance_kobo, payment_status,
            nomba_tx_ref, nomba_session_id,
            sender_account, sender_bank, sender_name,
            narration, period_month, created_at
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NOW())`,
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NOW())
+         RETURNING id`,
         [
           memberFundAccountId,
           member_id,
@@ -181,6 +183,8 @@ export const inflowHandlerService = {
         amountKobo,
         period,
       });
+
+      return { transactionId: txResult.rows[0]?.id };
     });
 
     logger.info({
@@ -191,6 +195,25 @@ export const inflowHandlerService = {
       variance_kobo:     reconciliation.varianceKobo,
       nomba_request_id:  requestId,
     }, '[InflowHandler] Transaction written and ledger updated');
+
+    await auditService.record({
+      org_id,
+      actor_type:  'WEBHOOK',
+      action:      'PAYMENT_RECEIVED',
+      entity_type: 'transaction',
+      entity_id:   transactionId,
+      metadata: {
+        member_id,
+        member_name:      memberAccount.member_name,
+        fund_type_id,
+        fund_name:        memberAccount.fund_name,
+        amount_kobo:      amountKobo,
+        payment_status:   reconciliation.status,
+        variance_kobo:    reconciliation.varianceKobo,
+        sender_name:      senderName,
+        nomba_request_id: requestId,
+      },
+    });
 
     // 6. Send notification — fires AFTER commit, never inside withTransaction
     notificationDispatcher.notifyMemberPayment({
@@ -222,8 +245,11 @@ export const inflowHandlerService = {
     },
     requestId: string,
   ): Promise<void> {
-    const sharedAccount = await queryOne<{ org_id: string; fund_type_id: string }>(
-      `SELECT org_id, fund_type_id FROM org_shared_fund_accounts WHERE account_reference = $1`,
+    const sharedAccount = await queryOne<{ org_id: string; fund_type_id: string; fund_name: string }>(
+      `SELECT osfa.org_id, osfa.fund_type_id, ft.name AS fund_name
+       FROM org_shared_fund_accounts osfa
+       JOIN fund_types ft ON ft.id = osfa.fund_type_id
+       WHERE osfa.account_reference = $1`,
       [fields.accountReference],
     );
 
@@ -236,14 +262,15 @@ export const inflowHandlerService = {
     const { org_id, fund_type_id } = sharedAccount;
     const period = currentPeriod();
 
-    await withTransaction(async (client) => {
-      await client.query(
+    const { transactionId } = await withTransaction(async (client) => {
+      const txResult = await client.query<{ id: string }>(
         `INSERT INTO anonymous_transactions (
            org_id, fund_type_id, amount_kobo,
            nomba_tx_ref, nomba_session_id,
            sender_account, sender_bank, sender_name,
            narration, period_month, created_at
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())`,
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
+         RETURNING id`,
         [
           org_id,
           fund_type_id,
@@ -264,6 +291,8 @@ export const inflowHandlerService = {
         amountKobo: fields.amountKobo,
         period,
       });
+
+      return { transactionId: txResult.rows[0]?.id };
     });
 
     logger.info({
@@ -272,5 +301,20 @@ export const inflowHandlerService = {
       amount_kobo:      fields.amountKobo,
       nomba_request_id: requestId,
     }, '[InflowHandler] Shared fund inflow recorded');
+
+    await auditService.record({
+      org_id,
+      actor_type:  'WEBHOOK',
+      action:      'ANONYMOUS_PAYMENT_RECEIVED',
+      entity_type: 'anonymous_transaction',
+      entity_id:   transactionId,
+      metadata: {
+        fund_type_id,
+        fund_name:        sharedAccount.fund_name,
+        amount_kobo:      fields.amountKobo,
+        sender_name:      fields.senderName,
+        nomba_request_id: requestId,
+      },
+    });
   },
 };
