@@ -27,6 +27,25 @@ describe('GET /health', () => {
   });
 });
 
+describe('GET /cron — uptime monitor ping', () => {
+  it('returns 200 with a minimal body and no auth', async () => {
+    const res = await request(app).get('/cron');
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('ok');
+    expect(typeof res.body.uptime).toBe('number');
+    expect(res.body.ts).toBeDefined();
+  });
+
+  it('body stays tiny — safe for monitor response limits', async () => {
+    const res = await request(app).get('/cron');
+
+    // Exactly three keys, constant shape, well under any monitor's cap
+    expect(Object.keys(res.body).sort()).toEqual(['status', 'ts', 'uptime']);
+    expect(JSON.stringify(res.body).length).toBeLessThan(200);
+  });
+});
+
 describe('404 handler', () => {
   it('returns 404 JSON for unknown top-level routes', async () => {
     const res = await request(app).get('/completely-unknown');

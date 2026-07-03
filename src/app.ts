@@ -69,6 +69,19 @@ export function createApp(): Express {
   // ── Health check (public, no prefix) ─────────────────────────────────
   app.use('/health', healthRouter);
 
+  // ── Uptime ping (public, no prefix) ───────────────────────────────────
+  // For UptimeRobot / external cron monitors. Deliberately does NOTHING:
+  // no DB ping, no Nomba check, no queries — a constant-size body that can
+  // never grow, never 503, and never exceed a monitor's response limit.
+  // Use /health for real dependency checks; point monitors here.
+  app.get('/cron', (_req, res) => {
+    res.status(200).json({
+      status: 'ok',
+      uptime: Math.floor(process.uptime()),
+      ts:     new Date().toISOString(),
+    });
+  });
+
   // ── API v1 routes ─────────────────────────────────────────────────────
   const api = '/api/v1';
 
