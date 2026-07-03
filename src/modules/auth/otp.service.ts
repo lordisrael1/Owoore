@@ -1,21 +1,7 @@
-import { createClient } from 'redis';
-import { env } from '../../config/env';
 import { logger } from '../../utils/logger';
 import { authRepository } from './auth.repository';
 import { Errors } from '../../utils/AppError';
-
-let redisClient: ReturnType<typeof createClient> | null = null;
-
-async function getRedis() {
-  if (redisClient?.isOpen) return redisClient;
-
-  redisClient = createClient({ url: env.REDIS_URL });
-  redisClient.on('error', (err) =>
-    logger.error({ err: err.message }, '[OTP] Redis connection error'),
-  );
-  await redisClient.connect();
-  return redisClient;
-}
+import { getRedisClient as getRedis } from '../../config/redis';
 
 const OTP_TTL_SECONDS   = 10 * 60;
 const MAX_ATTEMPTS       = 5;
