@@ -5,6 +5,7 @@ import { initNomba }       from './config/nomba';
 import { testResendConnection } from './config/resend';
 import { warmBankCache }   from './modules/payouts/bank-lookup.service';
 import { startScheduler }  from './jobs/scheduler';
+import { startWebhookWorker, stopQueue } from './queue/webhook.queue';
 import { env }             from './config/env';
 import { logger }          from './utils/logger';
 
@@ -57,6 +58,11 @@ async function bootstrap(): Promise<void> {
   // ── Step 6: Start job scheduler ───────────────────────────────────────
   const stopScheduler = startScheduler();
 
+  // ── Step 7: Start webhook queue worker (pg-boss, embedded) ───────────
+  // Runs in-process by default; can also run as a dedicated service via
+  // `npm run worker` — pg-boss handles multiple consumers safely.
+  await startWebhookWorker();
+
   // ── Graceful shutdown ─────────────────────────────────────────────────
   // Railway sends SIGTERM ~10s before forceful kill on deploy
   const shutdown = async (signal: string): Promise<void> => {
@@ -74,7 +80,12 @@ async function bootstrap(): Promise<void> {
     // 2. Stop cron jobs
     stopScheduler();
 
-    // 3. pg Pool drains automatically via process.on handlers in database.ts
+    // 3. Stop the queue worker — lets in-flight webhook jobs finish
+    await stopQueue().catch((err) => {
+      logger.warn({ err: err.message }, '[Server] Queue stop error');
+    });
+
+    // 4. pg Pool drains automatically via process.on handlers in database.ts
     logger.info('[Server] Shutdown complete');
     process.exit(0);
   };

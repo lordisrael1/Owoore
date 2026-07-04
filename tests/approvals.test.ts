@@ -37,6 +37,8 @@ const tokUsed       = randomUUID();
 const tokWrongPhone = randomUUID();
 const tokDecline    = randomUUID();
 
+// Generous timeout: the fixture chain is ~15 sequential inserts, and the
+// remote DB proxy can add ~1s of latency to each
 beforeAll(async () => {
   const org = await queryOne<{ id: string }>(
     `INSERT INTO organisations (name, slug) VALUES ($1, $2) RETURNING id`,
@@ -111,7 +113,7 @@ beforeAll(async () => {
   await insertApproval(tokUsed,       sigIds[2]!, `NOW() + INTERVAL '48 hours'`, true);
   await insertApproval(tokWrongPhone, sigIds[3]!, `NOW() + INTERVAL '48 hours'`, false);
   await insertApproval(tokDecline,    sigIds[4]!, `NOW() + INTERVAL '48 hours'`, false);
-});
+}, 60_000);
 
 afterAll(async () => {
   // payout_approvals.signatory_id and payout_requests.declined_by reference

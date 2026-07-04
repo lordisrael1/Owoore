@@ -3,9 +3,13 @@ import { env } from './env';
 
 const poolConfig: PoolConfig = {
   connectionString: env.DATABASE_URL,
-  max: 20,                  // max pool connections
+  // Tests run against the remote DB — keep their pools small so a test
+  // run never crowds out the deployed app's connections
+  max: env.NODE_ENV === 'test' ? 5 : 20,
   idleTimeoutMillis: 30000, // close idle connections after 30s
-  connectionTimeoutMillis: 5000, // fail if no connection in 5s
+  // Cross-provider connects (Render app → Railway Postgres proxy) can take
+  // several seconds cold — 5s caused spurious "connection timeout" failures
+  connectionTimeoutMillis: 15000,
   ssl: env.NODE_ENV === 'production'
     ? { rejectUnauthorized: false } // Railway postgres requires SSL
     : false,
