@@ -7,6 +7,7 @@ import { payoutRepository } from './payout.repository';
 import { assertTransition } from './payout-state.machine';
 import { adminUserRepository } from '../admin-users/admin-users.repository';
 import { auditService } from '../audit/audit.service';
+import { env } from '../../config/env';
 
 /**
  * sweep.service.ts — auto-sweep: check schedule, check min balance, fire transfer.
@@ -106,7 +107,15 @@ export const sweepService = {
       return;
     }
 
-    const amountKobo = balance.available_kobo;
+    // Sweep everything EXCEPT the Nomba transfer fee headroom — the fee is
+    // debited on top of the amount, so sweeping the full balance would fail
+    const amountKobo = balance.available_kobo - env.NOMBA_TRANSFER_FEE_KOBO;
+
+    if (amountKobo <= 0) {
+      logger.info({ org_id, fund_type_id, available_kobo: balance.available_kobo },
+        '[Sweep] Balance does not cover the transfer fee — skipping');
+      return;
+    }
 
     // 2. Verify destination bank account
     const lookup = await lookupBankAccount(bank_code, account_number);

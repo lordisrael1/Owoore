@@ -1,6 +1,7 @@
 import { queryOne } from '../../db';
 import { logger } from '../../utils/logger';
 import { Errors } from '../../utils/AppError';
+import { env } from '../../config/env';
 import { toKobo } from '../../utils/kobo';
 import { payoutRepository } from './payout.repository';
 import { manualPayoutService } from './maunal-payout.service';
@@ -60,12 +61,15 @@ export const payoutService = {
       orgId, bankCode, accountNumber,
     });
 
-    // Check available balance
+    // Check available balance — reserve headroom for the Nomba transfer fee,
+    // which is charged ON TOP of the amount (wallet debits amount + fee)
+    const feeBuffer = env.NOMBA_TRANSFER_FEE_KOBO;
     const balance = await ledgerService.getBalance(orgId, fundTypeId);
-    if (balance.available_kobo < amountKobo) {
+    if (balance.available_kobo < amountKobo + feeBuffer) {
       throw Errors.unprocessable(
         `Insufficient balance. Available: ₦${(balance.available_kobo / 100).toLocaleString()}, ` +
-        `Requested: ₦${amountNaira.toLocaleString()}`,
+        `Requested: ₦${amountNaira.toLocaleString()} ` +
+        `(plus ₦${(feeBuffer / 100).toLocaleString()} Nomba transfer fee)`,
       );
     }
 

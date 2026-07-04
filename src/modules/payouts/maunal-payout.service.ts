@@ -9,6 +9,7 @@ import { payoutTransferRef } from '../../utils/generateRefrence';
 import { assertTransition } from './payout-state.machine';
 import { currentPeriod } from '../../utils/formatMoney';
 import { auditService } from '../audit/audit.service';
+import { env } from '../../config/env';
 
 /**
  * manual-payout.service.ts
@@ -44,12 +45,14 @@ export const manualPayoutService = {
     // 1. Verify bank account name before sending any money
     const lookup = await lookupBankAccount(bankCode, accountNumber);
 
-    // 2. Check available balance
+    // 2. Check available balance — include headroom for the Nomba transfer
+    // fee, which is debited on top of the amount at settlement
+    const feeBuffer = env.NOMBA_TRANSFER_FEE_KOBO;
     const balance = await ledgerService.getBalance(orgId, fundTypeId);
-    if (balance.available_kobo < amountKobo) {
+    if (balance.available_kobo < amountKobo + feeBuffer) {
       throw Errors.unprocessable(
         `Insufficient fund balance. Available: ₦${balance.available_kobo / 100}, ` +
-        `Requested: ₦${amountKobo / 100}`,
+        `Requested: ₦${amountKobo / 100} (plus ₦${feeBuffer / 100} Nomba transfer fee)`,
       );
     }
 

@@ -269,6 +269,8 @@ export const nombaTransferService = {
 
     const merchantTxRef   = (tx.merchantTxRef  ?? tx.merchantTxReference) as string | undefined;
     const nombaTransferId = (tx.transactionId  ?? tx.id)                  as string | undefined;
+    // Nomba transfer fee in NAIRA — the wallet was debited amount + fee
+    const feeKobo         = Math.round((Number(tx.fee) || 0) * 100);
 
     if (!merchantTxRef) {
       logger.warn({ requestId, data }, '[NombaTransfer] payout_success missing merchantTxRef — check payload shape');
@@ -302,16 +304,17 @@ export const nombaTransferService = {
     await withTransaction(async (client) => {
       await client.query(
         `UPDATE payout_requests
-         SET status = 'TRANSFERRED', nomba_transfer_id = $2,
+         SET status = 'TRANSFERRED', nomba_transfer_id = $2, fee_kobo = $3,
              executed_at = NOW(), updated_at = NOW()
          WHERE id = $1`,
-        [payout.id, nombaTransferId ?? null],
+        [payout.id, nombaTransferId ?? null, feeKobo],
       );
 
       await ledgerService.debitLedger(client, {
         org_id:       payout.org_id,
         fund_type_id: payout.fund_type_id,
         amountKobo:   payout.amount_kobo,
+        feeKobo,
         period:       currentPeriod(),
       });
     });
@@ -331,6 +334,7 @@ export const nombaTransferService = {
       entity_id:   payout.id,
       metadata: {
         amount_kobo:        payout.amount_kobo,
+        fee_kobo:           feeKobo,
         purpose:            payout.purpose,
         nomba_transfer_ref: merchantTxRef,
         nomba_transfer_id:  nombaTransferId,

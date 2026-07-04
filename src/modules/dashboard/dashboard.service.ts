@@ -24,6 +24,7 @@ export const dashboardService = {
       total_collected_display: formatNaira(raw.total_collected_all_time_kobo),
       available_display:       formatNaira(raw.available_balance_kobo),
       pending_payouts_display: formatNaira(raw.pending_payouts_kobo),
+      total_fees_display:      formatNaira(raw.total_fees_all_time_kobo),
       deficit_member_count:    raw.deficit_member_count,
       // Collection rate this month vs last month
       trend: trend.map((t) => ({
@@ -39,18 +40,22 @@ export const dashboardService = {
   async getFundBreakdown(orgId: string, period?: string) {
     const funds = await dashboardRepository.getFundBreakdown(orgId, period);
 
-    return funds.map((f) => ({
-      ...f,
-      available_kobo: Math.max(
+    return funds.map((f) => {
+      // Fees subtracted so "available" mirrors the real Nomba wallet
+      const available = Math.max(
         0,
-        Number(f.total_collected_kobo) - Number(f.total_paid_out_kobo) - Number(f.soft_lock_kobo),
-      ),
-      // Display values
-      collected_display: formatNaira(Number(f.total_collected_kobo)),
-      available_display: formatNaira(
-        Math.max(0, Number(f.total_collected_kobo) - Number(f.total_paid_out_kobo) - Number(f.soft_lock_kobo)),
-      ),
-    }));
+        Number(f.total_collected_kobo) - Number(f.total_fees_kobo)
+          - Number(f.total_paid_out_kobo) - Number(f.soft_lock_kobo),
+      );
+
+      return {
+        ...f,
+        available_kobo:    available,
+        collected_display: formatNaira(Number(f.total_collected_kobo)),
+        fees_display:      formatNaira(Number(f.total_fees_kobo)),
+        available_display: formatNaira(available),
+      };
+    });
   },
 
   /**

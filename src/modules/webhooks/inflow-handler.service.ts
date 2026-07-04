@@ -37,6 +37,7 @@ interface NombaPaymentSuccessData {
     aliasAccountReference: string;   // our accountRef (VA lookup key)
     aliasAccountNumber:    string;   // NUBAN that received the payment
     transactionAmount:     number;   // NAIRA (float) — must × 100 for kobo
+    fee?:                  number;   // NAIRA — Nomba inbound charge (wallet gets amount − fee)
     sessionId?:            string;
     transactionId?:        string;
     narration?:            string;
@@ -60,8 +61,9 @@ export const inflowHandlerService = {
       return;
     }
 
-    // Nomba sends transactionAmount in NAIRA — convert to kobo
+    // Nomba sends transactionAmount and fee in NAIRA — convert to kobo
     const amountKobo         = Math.round((tx.transactionAmount ?? 0) * 100);
+    const feeKobo            = Math.round((tx.fee ?? 0) * 100);
     const narration          = tx.narration;
     const sessionId          = tx.sessionId;
     const transactionReference = tx.transactionId;
@@ -83,7 +85,7 @@ export const inflowHandlerService = {
 
     if (isShared) {
       await this.handleSharedFundInflow({
-        accountReference, amountKobo, narration, sessionId,
+        accountReference, amountKobo, feeKobo, narration, sessionId,
         transactionReference, senderAccountNumber, senderBankName, senderName,
       }, requestId);
       return;
@@ -151,11 +153,11 @@ export const inflowHandlerService = {
       const txResult = await client.query<{ id: string }>(
         `INSERT INTO transactions (
            member_fund_account_id, member_id, fund_type_id, org_id,
-           amount_kobo, expected_amt_kobo, variance_kobo, payment_status,
+           amount_kobo, fee_kobo, expected_amt_kobo, variance_kobo, payment_status,
            nomba_tx_ref, nomba_session_id,
            sender_account, sender_bank, sender_name,
            narration, period_month, created_at
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NOW())
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW())
          RETURNING id`,
         [
           memberFundAccountId,
@@ -163,6 +165,7 @@ export const inflowHandlerService = {
           fund_type_id,
           org_id,
           amountKobo,
+          feeKobo,
           expected_amt_kobo,
           reconciliation.varianceKobo,
           reconciliation.status,
@@ -176,11 +179,12 @@ export const inflowHandlerService = {
         ],
       );
 
-      // Update fund ledger
+      // Update fund ledger — gross credit, fee tracked separately
       await ledgerService.creditLedger(client, {
         org_id,
         fund_type_id,
         amountKobo,
+        feeKobo,
         period,
       });
 
@@ -208,6 +212,7 @@ export const inflowHandlerService = {
         fund_type_id,
         fund_name:        memberAccount.fund_name,
         amount_kobo:      amountKobo,
+        fee_kobo:         feeKobo,
         payment_status:   reconciliation.status,
         variance_kobo:    reconciliation.varianceKobo,
         sender_name:      senderName,
@@ -236,6 +241,7 @@ export const inflowHandlerService = {
     fields: {
       accountReference:    string;
       amountKobo:          number;
+      feeKobo?:            number;
       narration?:          string;
       sessionId?:          string;
       transactionReference?: string;
@@ -260,21 +266,23 @@ export const inflowHandlerService = {
     }
 
     const { org_id, fund_type_id } = sharedAccount;
+    const feeKobo = fields.feeKobo ?? 0;
     const period = currentPeriod();
 
     const { transactionId } = await withTransaction(async (client) => {
       const txResult = await client.query<{ id: string }>(
         `INSERT INTO anonymous_transactions (
-           org_id, fund_type_id, amount_kobo,
+           org_id, fund_type_id, amount_kobo, fee_kobo,
            nomba_tx_ref, nomba_session_id,
            sender_account, sender_bank, sender_name,
            narration, period_month, created_at
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
          RETURNING id`,
         [
           org_id,
           fund_type_id,
           fields.amountKobo,
+          feeKobo,
           fields.transactionReference ?? requestId,
           fields.sessionId,
           fields.senderAccountNumber,
@@ -289,6 +297,7 @@ export const inflowHandlerService = {
         org_id,
         fund_type_id,
         amountKobo: fields.amountKobo,
+        feeKobo,
         period,
       });
 
@@ -312,6 +321,7 @@ export const inflowHandlerService = {
         fund_type_id,
         fund_name:        sharedAccount.fund_name,
         amount_kobo:      fields.amountKobo,
+        fee_kobo:         feeKobo,
         sender_name:      fields.senderName,
         nomba_request_id: requestId,
       },

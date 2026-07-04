@@ -21,6 +21,7 @@ export const dashboardRepository = {
     kind:                 string;
     total_collected_kobo: number;
     total_paid_out_kobo:  number;
+    total_fees_kobo:      number;
     soft_lock_kobo:       number;
     available_kobo:       number;
     member_count_paid:    number;
@@ -35,8 +36,9 @@ export const dashboardRepository = {
          ft.kind,
          COALESCE(SUM(fl.total_collected_kobo), 0)::BIGINT AS total_collected_kobo,
          COALESCE(SUM(fl.total_paid_out_kobo),  0)::BIGINT AS total_paid_out_kobo,
+         COALESCE(SUM(fl.total_fees_kobo),      0)::BIGINT AS total_fees_kobo,
          COALESCE(SUM(fl.soft_lock_kobo),       0)::BIGINT AS soft_lock_kobo,
-         COALESCE(SUM(fl.total_collected_kobo - fl.total_paid_out_kobo - fl.soft_lock_kobo), 0)::BIGINT AS available_kobo,
+         COALESCE(SUM(fl.total_collected_kobo - fl.total_fees_kobo - fl.total_paid_out_kobo - fl.soft_lock_kobo), 0)::BIGINT AS available_kobo,
          COALESCE(SUM(fl.member_count_paid),    0)::INT    AS member_count_paid,
          COALESCE(SUM(fl.total_transactions),   0)::INT    AS total_transactions
        FROM fund_types ft
@@ -55,6 +57,7 @@ export const dashboardRepository = {
   async getSummary(orgId: string): Promise<{
     total_collected_all_time_kobo: number;
     total_paid_out_all_time_kobo:  number;
+    total_fees_all_time_kobo:      number;
     available_balance_kobo:        number;
     pending_payouts_kobo:          number;
     active_members:                number;
@@ -68,12 +71,14 @@ export const dashboardRepository = {
       queryOne<{
         total_collected: string;
         total_paid_out:  string;
+        total_fees:      string;
         soft_lock:       string;
         tx_count:        string;
       }>(
         `SELECT
            COALESCE(SUM(total_collected_kobo), 0)::TEXT AS total_collected,
            COALESCE(SUM(total_paid_out_kobo),  0)::TEXT AS total_paid_out,
+           COALESCE(SUM(total_fees_kobo),      0)::TEXT AS total_fees,
            COALESCE(SUM(soft_lock_kobo),       0)::TEXT AS soft_lock,
            COALESCE(SUM(total_transactions),   0)::TEXT AS tx_count
          FROM fund_ledger fl
@@ -112,12 +117,14 @@ export const dashboardRepository = {
 
     const collected   = Number(ledger?.total_collected ?? 0);
     const paidOut     = Number(ledger?.total_paid_out  ?? 0);
+    const fees        = Number(ledger?.total_fees      ?? 0);
     const softLock    = Number(ledger?.soft_lock       ?? 0);
 
     return {
       total_collected_all_time_kobo: collected,
       total_paid_out_all_time_kobo:  paidOut,
-      available_balance_kobo:        Math.max(0, collected - paidOut - softLock),
+      total_fees_all_time_kobo:      fees,
+      available_balance_kobo:        Math.max(0, collected - fees - paidOut - softLock),
       pending_payouts_kobo:          Number(pendingPayouts?.total_kobo ?? 0),
       active_members:                Number(members?.count ?? 0),
       total_transactions:            Number(ledger?.tx_count ?? 0),

@@ -23,6 +23,7 @@ export interface LedgerCreditInput {
   org_id:       string;
   fund_type_id: string;
   amountKobo:   number;
+  feeKobo?:     number; // Nomba inbound fee — wallet received amountKobo − feeKobo
   period:       string; // 'YYYY-MM'
 }
 
@@ -30,14 +31,16 @@ export interface LedgerDebitInput {
   org_id:       string;
   fund_type_id: string;
   amountKobo:   number;
+  feeKobo?:     number; // Nomba transfer fee — wallet was debited amountKobo + feeKobo
   period:       string;
 }
 
 export interface FundBalance {
   total_collected_kobo: number;
   total_paid_out_kobo:  number;
+  total_fees_kobo:      number;
   soft_lock_kobo:       number;
-  available_kobo:       number; // computed: collected - paid_out - soft_lock
+  available_kobo:       number; // computed: collected - fees - paid_out - soft_lock
   member_count_paid:    number;
   total_transactions:   number;
 }
@@ -52,20 +55,22 @@ export const ledgerService = {
    * Must be called INSIDE a withTransaction() block from the calling service.
    */
   async creditLedger(client: PoolClient, input: LedgerCreditInput): Promise<void> {
-    const { org_id, fund_type_id, amountKobo, period } = input;
+    const { org_id, fund_type_id, amountKobo, feeKobo = 0, period } = input;
 
     await client.query(
       `INSERT INTO fund_ledger
          (org_id, fund_type_id, total_collected_kobo, total_paid_out_kobo,
-          soft_lock_kobo, member_count_paid, total_transactions, period_month, updated_at)
-       VALUES ($1, $2, $3, 0, 0, 1, 1, $4, NOW())
+          total_fees_kobo, soft_lock_kobo, member_count_paid, total_transactions,
+          period_month, updated_at)
+       VALUES ($1, $2, $3, 0, $4, 0, 1, 1, $5, NOW())
        ON CONFLICT (org_id, fund_type_id, period_month)
        DO UPDATE SET
          total_collected_kobo = fund_ledger.total_collected_kobo + EXCLUDED.total_collected_kobo,
+         total_fees_kobo      = fund_ledger.total_fees_kobo + EXCLUDED.total_fees_kobo,
          member_count_paid    = fund_ledger.member_count_paid + 1,
          total_transactions   = fund_ledger.total_transactions + 1,
          updated_at           = NOW()`,
-      [org_id, fund_type_id, amountKobo, period],
+      [org_id, fund_type_id, amountKobo, feeKobo, period],
     );
   },
 
@@ -76,18 +81,19 @@ export const ledgerService = {
    * Called by nomba-transfer.service.ts after transfer.success webhook.
    */
   async debitLedger(client: PoolClient, input: LedgerDebitInput): Promise<void> {
-    const { org_id, fund_type_id, amountKobo, period } = input;
+    const { org_id, fund_type_id, amountKobo, feeKobo = 0, period } = input;
 
     await client.query(
       `UPDATE fund_ledger
        SET
          total_paid_out_kobo = total_paid_out_kobo + $3,
+         total_fees_kobo     = total_fees_kobo + $4,
          soft_lock_kobo      = GREATEST(0, soft_lock_kobo - $3),
          updated_at          = NOW()
        WHERE org_id = $1
          AND fund_type_id = $2
-         AND period_month = $4`,
-      [org_id, fund_type_id, amountKobo, period],
+         AND period_month = $5`,
+      [org_id, fund_type_id, amountKobo, feeKobo, period],
     );
   },
 
@@ -154,6 +160,7 @@ export const ledgerService = {
     const rows = await query<{
       total_collected_kobo: string;
       total_paid_out_kobo:  string;
+      total_fees_kobo:      string;
       soft_lock_kobo:       string;
       member_count_paid:    string;
       total_transactions:   string;
@@ -161,6 +168,7 @@ export const ledgerService = {
       `SELECT
          COALESCE(SUM(total_collected_kobo), 0)::TEXT AS total_collected_kobo,
          COALESCE(SUM(total_paid_out_kobo),  0)::TEXT AS total_paid_out_kobo,
+         COALESCE(SUM(total_fees_kobo),      0)::TEXT AS total_fees_kobo,
          COALESCE(SUM(soft_lock_kobo),       0)::TEXT AS soft_lock_kobo,
          COALESCE(SUM(member_count_paid),    0)::TEXT AS member_count_paid,
          COALESCE(SUM(total_transactions),   0)::TEXT AS total_transactions
@@ -172,13 +180,16 @@ export const ledgerService = {
     const row = rows.rows[0];
     const collected = Number(row.total_collected_kobo);
     const paidOut   = Number(row.total_paid_out_kobo);
+    const fees      = Number(row.total_fees_kobo);
     const softLock  = Number(row.soft_lock_kobo);
 
     return {
       total_collected_kobo: collected,
       total_paid_out_kobo:  paidOut,
+      total_fees_kobo:      fees,
       soft_lock_kobo:       softLock,
-      available_kobo:       Math.max(0, collected - paidOut - softLock),
+      // Fees are subtracted so "available" mirrors the real Nomba wallet
+      available_kobo:       Math.max(0, collected - fees - paidOut - softLock),
       member_count_paid:    Number(row.member_count_paid),
       total_transactions:   Number(row.total_transactions),
     };
