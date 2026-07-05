@@ -19,6 +19,8 @@ router.post(
 );
  
 router.get('/',     payoutController.list);
+// Must be registered before /:id or it would be captured as an id
+router.get('/fund-balances', payoutController.fundBalances);
 router.get('/:id',  payoutController.getById);
 router.delete('/:id', requireRole(['ADMIN', 'TREASURER']), payoutController.cancel);
  

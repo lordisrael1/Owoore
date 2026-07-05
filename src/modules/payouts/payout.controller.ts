@@ -3,6 +3,8 @@ import { catchAsync } from '../../utils/catchAsync';
 import { payoutService } from './payout.service';
 import { payoutRepository } from './payout.repository';
 import { Errors } from '../../utils/AppError';
+import { env } from '../../config/env';
+import { formatNaira } from '../../utils/formatMoney';
 
 export const payoutController = {
   // POST /payouts — initiate a new payout request
@@ -35,6 +37,30 @@ export const payoutController = {
     });
 
     res.json({ success: true, data: payouts });
+  }),
+
+  // GET /payouts/fund-balances — per-fund available balance for the initiate form
+  fundBalances: catchAsync(async (req: Request, res: Response) => {
+    const user = (req as any).user;
+    const rows = await payoutRepository.fundBalances(user.orgId);
+
+    res.json({
+      success: true,
+      data: {
+        transfer_fee_kobo: env.NOMBA_TRANSFER_FEE_KOBO,
+        funds: rows.map((r) => {
+          const available = Number(r.available_kobo);
+          return {
+            fund_type_id:      r.fund_type_id,
+            fund_name:         r.fund_name,
+            kind:              r.kind,
+            is_anonymous_only: r.is_anonymous_only,
+            available_kobo:    available,
+            available_display: formatNaira(available),
+          };
+        }),
+      },
+    });
   }),
 
   // GET /payouts/:id — get single payout with approval records

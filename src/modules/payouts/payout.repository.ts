@@ -155,6 +155,43 @@ export const payoutRepository = {
     );
   },
 
+  /**
+   * fundBalances — all-time available balance per active fund.
+   *
+   * Mirrors ledgerService.getBalance exactly (all-time SUM over fund_ledger,
+   * fees + paid_out + soft_lock subtracted, floored at 0) so the number the
+   * admin sees on the initiate-payout form is the same number the balance
+   * check in payoutService.initiate enforces.
+   *
+   * Includes anonymous-only funds — money given anonymously is still
+   * payable out, it's only hidden from member-facing fund lists.
+   */
+  async fundBalances(org_id: string): Promise<Array<{
+    fund_type_id:      string;
+    fund_name:         string;
+    kind:              string;
+    is_anonymous_only: boolean;
+    available_kobo:    string; // BIGINT comes back as string from pg
+  }>> {
+    return queryMany(
+      `SELECT
+         ft.id                AS fund_type_id,
+         ft.name              AS fund_name,
+         ft.kind,
+         ft.is_anonymous_only,
+         GREATEST(0, COALESCE(SUM(
+           fl.total_collected_kobo - fl.total_fees_kobo
+           - fl.total_paid_out_kobo - fl.soft_lock_kobo
+         ), 0))::BIGINT AS available_kobo
+       FROM fund_types ft
+       LEFT JOIN fund_ledger fl ON fl.fund_type_id = ft.id
+       WHERE ft.org_id = $1 AND ft.is_active = TRUE
+       GROUP BY ft.id, ft.name, ft.kind, ft.is_anonymous_only
+       ORDER BY ft.sort_order ASC`,
+      [org_id],
+    );
+  },
+
   // Expired requests — used by expiry.job.ts cron
   async findExpired(): Promise<PayoutRequest[]> {
     return queryMany<PayoutRequest>(
