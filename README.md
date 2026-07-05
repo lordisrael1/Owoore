@@ -1,8 +1,8 @@
-# DropTithe (Owoore)
+# Owoore
 
 **Multi-tenant digital giving infrastructure for churches — built on dedicated virtual bank accounts.**
 
-DropTithe lets any church onboard in minutes, hand every member a *permanent, personal* NUBAN bank account per fund (Tithe, Offering, Building Fund…), and reconcile every naira automatically. Members give by simple bank transfer from any banking app — no cards, no USSD codes, no payment pages. The treasury side is governed by an M-of-N signatory approval workflow, so no single person can move church money alone.
+Owoore lets any church onboard in minutes, hand every member a *permanent, personal* NUBAN bank account per fund (Tithe, Offering, Building Fund…), and reconcile every naira automatically. Members give by simple bank transfer from any banking app — no cards, no USSD codes, no payment pages. The treasury side is governed by an M-of-N signatory approval workflow, so no single person can move church money alone.
 
 Built with **TypeScript + Express 5 + PostgreSQL + Redis**, powered by **[Nomba](https://nomba.com)** virtual accounts and payouts.
 
@@ -504,4 +504,4 @@ Vitest + Supertest exercise the HTTP layer end-to-end (see [tests/](tests/)). Th
 
 ---
 
-*DropTithe — accountability infrastructure for community giving. Every naira attributed, every payout approved, every action audited.*
+*Owoore — accountability infrastructure for community giving. Every naira attributed, every payout approved, every action audited.*
