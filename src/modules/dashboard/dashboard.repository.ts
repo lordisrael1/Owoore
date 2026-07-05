@@ -19,6 +19,8 @@ export const dashboardRepository = {
     fund_type_id:         string;
     fund_name:            string;
     kind:                 string;
+    is_shared_va:         boolean;
+    is_anonymous_only:    boolean;
     total_collected_kobo: number;
     total_paid_out_kobo:  number;
     total_fees_kobo:      number;
@@ -34,6 +36,8 @@ export const dashboardRepository = {
          ft.id           AS fund_type_id,
          ft.name         AS fund_name,
          ft.kind,
+         ft.is_shared_va,
+         ft.is_anonymous_only,
          COALESCE(SUM(fl.total_collected_kobo), 0)::BIGINT AS total_collected_kobo,
          COALESCE(SUM(fl.total_paid_out_kobo),  0)::BIGINT AS total_paid_out_kobo,
          COALESCE(SUM(fl.total_fees_kobo),      0)::BIGINT AS total_fees_kobo,
@@ -44,7 +48,7 @@ export const dashboardRepository = {
        FROM fund_types ft
        LEFT JOIN fund_ledger fl ON fl.fund_type_id = ft.id AND fl.period_month = $2
        WHERE ft.org_id = $1 AND ft.is_active = TRUE
-       GROUP BY ft.id, ft.name, ft.kind
+       GROUP BY ft.id, ft.name, ft.kind, ft.is_shared_va, ft.is_anonymous_only
        ORDER BY ft.sort_order ASC`,
       [orgId, currentPeriod],
     );
