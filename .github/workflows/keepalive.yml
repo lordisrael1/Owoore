@@ -1,0 +1,30 @@
+# keepalive.yml — pings /cron so Render's free tier never spins down.
+#
+# Render free web services sleep after 15 minutes without inbound traffic;
+# the next visitor then eats a ~50s cold start. Worse: the in-process
+# node-cron jobs (sweep 23:00, reconciliation 02:00, hourly payout expiry,
+# Monday reminders) only fire if the process is AWAKE at that moment — so
+# this ping is what makes the scheduled jobs reliable, not just a latency fix.
+#
+# Every 10 minutes, not 14: GitHub cron schedules can jitter by several
+# minutes under load, and 10 + jitter still lands safely inside the
+# 15-minute idle window.
+
+name: keepalive
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch: {}   # allows manual runs from the Actions tab
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /cron
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+            --max-time 60 --retry 3 --retry-delay 5 \
+            https://owoore.onrender.com/cron)
+          echo "GET /cron → HTTP $code"
+          test "$code" = "200"
