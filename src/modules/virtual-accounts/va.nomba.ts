@@ -1,7 +1,7 @@
 import { nombaClient } from '../../config/nomba';
 import { env } from '../../config/env';
 import { logger } from '../../utils/logger';
-import { Errors } from '../../utils/AppError';
+import { AppError, Errors } from '../../utils/AppError';
 import { assertKobo } from '../../utils/kobo';
 
 /**
@@ -117,6 +117,10 @@ export const vaNomba = {
       return result;
 
     } catch (err: any) {
+      // Already an AppError (e.g. 503 NOMBA_UNAVAILABLE from the circuit
+      // breaker failing fast) — propagate as-is, don't re-wrap as a 502.
+      if (err instanceof AppError) throw err;
+
       const msg = err.response?.data?.description ?? err.message;
 
       logger.error({
@@ -164,6 +168,8 @@ export const vaNomba = {
         accountRef,
       };
     } catch (err: any) {
+      if (err instanceof AppError) throw err;
+
       const msg = err.response?.data?.description ?? err.message;
       logger.error({ account_ref: accountRef, err: msg },
         '[VaNomba] Get VA by accountRef failed');
@@ -192,6 +198,8 @@ export const vaNomba = {
 
       return !!data.expired;
     } catch (err: any) {
+      if (err instanceof AppError) throw err;
+
       const msg = err.response?.data?.description ?? err.message;
       logger.error({ account_ref: accountRef, err: msg },
         '[VaNomba] Expire VA failed');

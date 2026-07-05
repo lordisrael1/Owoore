@@ -69,6 +69,17 @@ export const Errors = {
   nombaError: (msg: string) =>
     new AppError(`Nomba API error: ${msg}`, 502, true, 'NOMBA_ERROR'),
 
+  // Circuit breaker is OPEN — Nomba is timing out and we're failing fast
+  // instead of letting each request hang for the full 30s timeout.
+  nombaUnavailable: (retryInMs?: number) =>
+    new AppError(
+      'Our payment provider is temporarily unavailable. Please try again shortly.',
+      503,
+      true,
+      'NOMBA_UNAVAILABLE',
+      retryInMs ? { retryAfterSeconds: Math.ceil(retryInMs / 1000) } : undefined,
+    ),
+
   payoutNotActionable: (status: string) =>
     new AppError(
       `Payout request cannot be actioned in status: ${status}`,

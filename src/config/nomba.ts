@@ -1,5 +1,34 @@
 import axios, { AxiosInstance, InternalAxiosRequestConfig } from 'axios';
 import { env } from './env';
+import { CircuitBreaker, CircuitOpenError } from '../utils/circuit-breaker';
+import { Errors } from '../utils/AppError';
+
+// ── Circuit breaker ────────────────────────────────────────────────────────
+// ONE breaker shared by both axios instances — v1 and v2 are the same
+// upstream, so if Nomba is down for transfers it's down for VA creation
+// too. When Nomba starts timing out, 5 consecutive systemic failures trip
+// the breaker OPEN and every call fails fast with a 503 instead of each
+// request burning the full 30s timeout. After a cooldown (30s, doubling
+// to 5min max while Nomba stays dead) a couple of probe requests are let
+// through — if they succeed traffic resumes automatically.
+//
+// Only SYSTEMIC faults count as failures: timeouts, connection errors,
+// HTTP 5xx. A 4xx (bad payload, unknown account) proves Nomba is alive
+// and resets the failure streak — otherwise a burst of user typos in
+// bank-account lookups could trip the breaker on a healthy API.
+const nombaBreaker = new CircuitBreaker({
+  name:              'nomba',
+  failureThreshold:  5,
+  successThreshold:  2,
+  baseCooldownMs:    30_000,
+  maxCooldownMs:     300_000,
+  halfOpenMaxProbes: 2,
+});
+
+/** Systemic = no response at all (timeout/DNS/conn reset) or a 5xx. */
+function isSystemicFailure(error: any): boolean {
+  return !error.response || error.response.status >= 500;
+}
 
 // ── Token cache ────────────────────────────────────────────────────────────
 // Nomba tokens are valid for 60 minutes.
@@ -68,9 +97,12 @@ function createNombaClient(baseURL: string): AxiosInstance {
     timeout: 30000, // 30s — Nomba transfers may be slow
   });
 
-  // Request interceptor — inject Bearer token on every call
+  // Request interceptor — fail fast if the breaker is open, THEN inject
+  // the Bearer token. Breaker check comes first so an open circuit never
+  // pays the token-refresh round trip (which also hits Nomba).
   client.interceptors.request.use(
     async (config: InternalAxiosRequestConfig) => {
+      nombaBreaker.assertRequestAllowed();
       const token = await getValidToken();
       config.headers.Authorization = `Bearer ${token}`;
       return config;
@@ -78,10 +110,27 @@ function createNombaClient(baseURL: string): AxiosInstance {
     (error) => Promise.reject(error),
   );
 
-  // Response interceptor — log Nomba errors with full context
+  // Response interceptor — feed the breaker, log Nomba errors with context
   client.interceptors.response.use(
-    (response) => response,
+    (response) => {
+      nombaBreaker.recordSuccess();
+      return response;
+    },
     (error) => {
+      // Fail-fast rejection from assertRequestAllowed above — no network
+      // call happened, so it must NOT count as another failure. Map it to
+      // the 503 callers surface as "try again shortly".
+      if (error instanceof CircuitOpenError) {
+        return Promise.reject(Errors.nombaUnavailable(error.retryInMs));
+      }
+
+      if (isSystemicFailure(error)) {
+        nombaBreaker.recordFailure();
+      } else {
+        // Nomba answered (4xx) — the upstream is alive
+        nombaBreaker.recordSuccess();
+      }
+
       const nombaError = error.response?.data;
       console.error('[Nomba] API error', {
         status: error.response?.status,
