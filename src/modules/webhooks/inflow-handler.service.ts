@@ -179,6 +179,15 @@ export const inflowHandlerService = {
         ],
       );
 
+      // Unique-giver check: any OTHER payment by this member to this fund
+      // this period? (The row above is already inserted, so exclude it.)
+      const priorTx = await client.query(
+        `SELECT 1 FROM transactions
+         WHERE member_fund_account_id = $1 AND period_month = $2 AND id <> $3
+         LIMIT 1`,
+        [memberFundAccountId, period, txResult.rows[0]?.id],
+      );
+
       // Update fund ledger — gross credit, fee tracked separately
       await ledgerService.creditLedger(client, {
         org_id,
@@ -186,6 +195,7 @@ export const inflowHandlerService = {
         amountKobo,
         feeKobo,
         period,
+        isFirstGiftThisPeriod: priorTx.rowCount === 0,
       });
 
       return { transactionId: txResult.rows[0]?.id };
@@ -299,6 +309,9 @@ export const inflowHandlerService = {
         amountKobo: fields.amountKobo,
         feeKobo,
         period,
+        // Anonymous/shared inflows carry no member identity — they can never
+        // count toward unique givers
+        isFirstGiftThisPeriod: false,
       });
 
       return { transactionId: txResult.rows[0]?.id };

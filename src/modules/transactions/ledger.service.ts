@@ -25,6 +25,12 @@ export interface LedgerCreditInput {
   amountKobo:   number;
   feeKobo?:     number; // Nomba inbound fee — wallet received amountKobo − feeKobo
   period:       string; // 'YYYY-MM'
+  /**
+   * member_count_paid tracks UNIQUE givers per period, not payment count.
+   * Pass true only for a member's first payment to this fund this period;
+   * false for repeat payments and for anonymous/shared inflows (no identity).
+   */
+  isFirstGiftThisPeriod?: boolean;
 }
 
 export interface LedgerDebitInput {
@@ -55,22 +61,23 @@ export const ledgerService = {
    * Must be called INSIDE a withTransaction() block from the calling service.
    */
   async creditLedger(client: PoolClient, input: LedgerCreditInput): Promise<void> {
-    const { org_id, fund_type_id, amountKobo, feeKobo = 0, period } = input;
+    const { org_id, fund_type_id, amountKobo, feeKobo = 0, period,
+            isFirstGiftThisPeriod = false } = input;
 
     await client.query(
       `INSERT INTO fund_ledger
          (org_id, fund_type_id, total_collected_kobo, total_paid_out_kobo,
           total_fees_kobo, soft_lock_kobo, member_count_paid, total_transactions,
           period_month, updated_at)
-       VALUES ($1, $2, $3, 0, $4, 0, 1, 1, $5, NOW())
+       VALUES ($1, $2, $3, 0, $4, 0, $6, 1, $5, NOW())
        ON CONFLICT (org_id, fund_type_id, period_month)
        DO UPDATE SET
          total_collected_kobo = fund_ledger.total_collected_kobo + EXCLUDED.total_collected_kobo,
          total_fees_kobo      = fund_ledger.total_fees_kobo + EXCLUDED.total_fees_kobo,
-         member_count_paid    = fund_ledger.member_count_paid + 1,
+         member_count_paid    = fund_ledger.member_count_paid + EXCLUDED.member_count_paid,
          total_transactions   = fund_ledger.total_transactions + 1,
          updated_at           = NOW()`,
-      [org_id, fund_type_id, amountKobo, feeKobo, period],
+      [org_id, fund_type_id, amountKobo, feeKobo, period, isFirstGiftThisPeriod ? 1 : 0],
     );
   },
 
