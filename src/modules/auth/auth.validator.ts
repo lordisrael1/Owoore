@@ -31,7 +31,12 @@ export const adminForgotPasswordSchema = z.object({
 export const adminResetPasswordSchema = z.object({
   email:        z.string().email('Enter a valid email address'),
   code:         z.string().length(6, 'Code must be 6 digits').regex(/^\d{6}$/, 'Code must be numeric'),
-  new_password: z.string().min(8, 'Password must be at least 8 characters').max(128),
+  new_password: z.string()
+    .min(8, 'Password must be at least 8 characters')
+    .max(128)
+    .regex(/[A-Z]/, 'Password must include an uppercase letter')
+    .regex(/[a-z]/, 'Password must include a lowercase letter')
+    .regex(/\d/,    'Password must include a number'),
 });
 
 export const refreshTokenSchema = z.object({
