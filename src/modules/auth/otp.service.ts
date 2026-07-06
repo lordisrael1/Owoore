@@ -2,6 +2,7 @@ import { logger } from '../../utils/logger';
 import { authRepository } from './auth.repository';
 import { Errors } from '../../utils/AppError';
 import { getRedisClient as getRedis } from '../../config/redis';
+import { env } from '../../config/env';
 
 const OTP_TTL_SECONDS   = 10 * 60;
 const MAX_ATTEMPTS       = 5;
@@ -11,8 +12,30 @@ function generateCode(): string {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
+/**
+ * isDemoAccount — judging/demo shortcut, disabled unless BOTH
+ * DEMO_MEMBER_EMAIL and DEMO_OTP_CODE are set in the environment.
+ *
+ * That single email verifies with the fixed code and nothing is
+ * generated, stored, or emailed — so published test credentials work
+ * without inbox access. Scope is one member JWT in one org; the env
+ * vars should be removed after judging.
+ */
+export function isDemoAccount(email: string): boolean {
+  return Boolean(env.DEMO_MEMBER_EMAIL) &&
+         Boolean(env.DEMO_OTP_CODE) &&
+         email.toLowerCase() === env.DEMO_MEMBER_EMAIL!.toLowerCase();
+}
+
 export const otpService = {
   async send(email: string): Promise<string> {
+    // Demo account: nothing generated or stored — verify accepts the
+    // fixed code directly, so there is nothing to rate-limit either.
+    if (isDemoAccount(email)) {
+      logger.warn({ email }, '[OTP] Demo account — fixed OTP active, nothing generated');
+      return env.DEMO_OTP_CODE!;
+    }
+
     const recent = await authRepository.countRecentOtps(email);
     if (recent >= RATE_LIMIT_MAX) {
       throw Errors.tooManyRequests(
@@ -49,6 +72,14 @@ export const otpService = {
    * for calling consume() once the full flow has succeeded.
    */
   async checkValid(email: string, code: string): Promise<void> {
+    if (isDemoAccount(email)) {
+      if (code === env.DEMO_OTP_CODE) {
+        logger.warn({ email }, '[OTP] Demo account verified with fixed code');
+        return;
+      }
+      throw Errors.badRequest('Incorrect OTP. Please request a new code.');
+    }
+
     try {
       const redis    = await getRedis();
       const redisKey = `otp:${email}`;
@@ -90,6 +121,8 @@ export const otpService = {
    * flow has succeeded (member resolved, about to issue the JWT).
    */
   async consume(email: string): Promise<void> {
+    if (isDemoAccount(email)) return; // nothing was stored
+
     try {
       const redis = await getRedis();
       await redis.del(`otp:${email}`);

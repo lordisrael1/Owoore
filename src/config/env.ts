@@ -1,5 +1,10 @@
 import { z } from 'zod';
 
+// Optional vars copied from .env.example arrive as EMPTY STRINGS
+// (`KEY=`), which would fail .email()/.length() checks and block boot.
+// Treat empty as unset so a verbatim copy of the example still starts.
+const emptyAsUndefined = (v: unknown) => (v === '' ? undefined : v);
+
 const envSchema = z.object({
   // ── Server ────────────────────────────────────────────────
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -36,7 +41,7 @@ const envSchema = z.object({
   // Ops inbox for operational alerts (e.g. a webhook event that exhausted
   // all retries and landed in the dead-letter queue). Optional: when unset
   // the alert is still logged at ERROR level, just not emailed.
-  OPS_ALERT_EMAIL: z.string().email().optional(),
+  OPS_ALERT_EMAIL: z.preprocess(emptyAsUndefined, z.string().email().optional()),
 
   // ── Cloudinary ────────────────────────────────────────────
   CLOUDINARY_CLOUD_NAME: z.string().min(1, 'CLOUDINARY_CLOUD_NAME is required'),
@@ -46,6 +51,15 @@ const envSchema = z.object({
   // ── App ───────────────────────────────────────────────────
   APP_BASE_URL: z.string().url().default('http://localhost:3000'),
   APPROVAL_LINK_BASE_URL: z.string().url().default('http://localhost:3000/approve'),
+
+  // ── Demo / judging credentials ────────────────────────────
+  // When BOTH are set, DEMO_MEMBER_EMAIL logs in with the fixed
+  // DEMO_OTP_CODE — no OTP is generated, stored, or emailed. Lets
+  // judges use published test credentials without inbox access.
+  // Leave unset (the default) and the shortcut does not exist.
+  DEMO_MEMBER_EMAIL: z.preprocess(emptyAsUndefined, z.string().email().optional()),
+  DEMO_OTP_CODE:     z.preprocess(emptyAsUndefined,
+                       z.string().length(6).regex(/^\d{6}$/).optional()),
 });
 
 // Parse and validate — throws with a clear message if any var is missing

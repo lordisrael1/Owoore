@@ -2,7 +2,7 @@ import { queryOne } from '../../db';
 import { signMemberToken } from '../../config/jwt';
 import { memberCode } from '../../utils/generateRefrence';
 import { normaliseEmail, maskEmail } from '../../utils/email';
-import { otpService } from './otp.service';
+import { otpService, isDemoAccount } from './otp.service';
 import { refreshTokenService } from './refresh-token.service';
 import { emailService } from '../../notifications/email/email.service';
 import { logger } from '../../utils/logger';
@@ -31,7 +31,11 @@ export const authService = {
       }, '[Auth] OTP generated (DEV — also check logs)');
     }
 
-    await this.deliverOtp(normalisedEmail, code, org.name);
+    // Demo account uses a fixed code — don't attempt real delivery to
+    // an inbox nobody owns. Same response either way: no hint leaks.
+    if (!isDemoAccount(normalisedEmail)) {
+      await this.deliverOtp(normalisedEmail, code, org.name);
+    }
 
     return { message: `Verification code sent to ${maskEmail(normalisedEmail)}` };
   },
