@@ -393,6 +393,8 @@ Registered by [scheduler.ts](src/jobs/scheduler.ts) on boot, all in `Africa/Lago
 | Transport/API | helmet, strict CORS, express-rate-limit, Zod validation on body/params/query, no stack traces in production errors |
 | Money integrity | kobo-only `BIGINT` arithmetic, `CHECK` constraints on every balance column, idempotent transfer refs |
 
+The full write-up — architecture diagrams, webhook durability contract, failure-mode table — lives in [docs/ARCHITECTURE-SECURITY.md](docs/ARCHITECTURE-SECURITY.md).
+
 ---
 
 ## Getting started
@@ -401,8 +403,8 @@ Registered by [scheduler.ts](src/jobs/scheduler.ts) on boot, all in `Africa/Lago
 
 ```bash
 # 1. Clone & install
-git clone https://github.com/lordisrael/DropTithe.git
-cd DropTithe
+git clone https://github.com/lordisrael1/Owoore.git
+cd Owoore
 npm install
 
 # 2. Configure — every variable is validated by Zod at boot with a
