@@ -24,6 +24,16 @@ export const verifyAdminEmailSchema = z.object({
   org_slug: z.string().min(1, 'org_slug is required'),
 });
 
+export const adminForgotPasswordSchema = z.object({
+  email: z.string().email('Enter a valid email address'),
+});
+
+export const adminResetPasswordSchema = z.object({
+  email:        z.string().email('Enter a valid email address'),
+  code:         z.string().length(6, 'Code must be 6 digits').regex(/^\d{6}$/, 'Code must be numeric'),
+  new_password: z.string().min(8, 'Password must be at least 8 characters').max(128),
+});
+
 export const refreshTokenSchema = z.object({
   token: z.string().min(1, 'Token is required'),
 });

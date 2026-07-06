@@ -6,6 +6,8 @@ import {
   verifyOtpSchema,
   adminLoginSchema,
   verifyAdminEmailSchema,
+  adminForgotPasswordSchema,
+  adminResetPasswordSchema,
   refreshTokenSchema,
 } from './auth.validator';
 import { authController } from './auth.controller';
@@ -48,6 +50,20 @@ router.post('/admin/login',
 router.post('/admin/verify-email',
   validateBody(verifyAdminEmailSchema),
   authController.verifyAdminEmail,
+);
+
+// Forgot/reset password for admin + treasurer accounts (both live in
+// admin_users). OTP rate limiter on the send; login limiter on the attempt.
+router.post('/admin/forgot-password',
+  otpRateLimiter,
+  validateBody(adminForgotPasswordSchema),
+  authController.adminForgotPassword,
+);
+
+router.post('/admin/reset-password',
+  adminLoginRateLimiter,
+  validateBody(adminResetPasswordSchema),
+  authController.adminResetPassword,
 );
 
 router.post('/refresh',

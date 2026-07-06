@@ -1,11 +1,13 @@
 import bcrypt from 'bcryptjs';
-import { queryOne } from '../../db';
+import { queryOne, queryMany } from '../../db';
 import { signAdminToken } from '../../config/jwt';
 import { logger } from '../../utils/logger';
 import { Errors } from '../../utils/AppError';
-import { normaliseEmail } from '../../utils/email';
+import { normaliseEmail, maskEmail } from '../../utils/email';
 import { otpService } from './otp.service';
 import { adminUserRepository } from '../admin-users/admin-users.repository';
+import { emailService } from '../../notifications/email/email.service';
+import { auditService } from '../audit/audit.service';
 
 /**
  * admin-auth.service.ts
@@ -149,6 +151,114 @@ export const adminAuthService = {
         orgSlug: org.slug,
       },
     };
+  },
+
+  /**
+   * requestPasswordReset — emails a 6-digit reset code to the admin/treasurer.
+   *
+   * Always resolves with the same generic message whether or not an account
+   * exists for the email — never confirms account existence to a caller.
+   * Reuses the OTP infrastructure (10-min TTL, 5 attempts, 3 sends / 15 min).
+   */
+  async requestPasswordReset(email: string): Promise<{ message: string }> {
+    const normalisedEmail = normaliseEmail(email);
+    const GENERIC_MSG = `If an account exists for ${maskEmail(normalisedEmail)}, a reset code has been sent.`;
+
+    const admins = await queryMany<{ id: string; org_id: string; is_active: boolean }>(
+      `SELECT id, org_id, is_active FROM admin_users WHERE LOWER(email) = LOWER($1)`,
+      [normalisedEmail],
+    );
+
+    const active = admins.filter((a) => a.is_active);
+    if (active.length === 0) {
+      // No account (or deactivated) — say nothing, send nothing
+      logger.info({ email: maskEmail(normalisedEmail) },
+        '[AdminAuth] Password reset requested for unknown/inactive email');
+      return { message: GENERIC_MSG };
+    }
+
+    const code = await otpService.send(normalisedEmail);
+
+    await emailService.send({
+      to:      normalisedEmail,
+      subject: 'Reset your Owoore password',
+      html: `
+<!DOCTYPE html><html><head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;background:#f9fafb;font-family:sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="padding:32px 16px;">
+  <tr><td align="center">
+    <table width="420" cellpadding="0" cellspacing="0"
+           style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);">
+      <tr>
+        <td style="background:#14532d;padding:24px 32px;">
+          <p style="margin:0;color:#fff;font-size:20px;font-weight:600;">Owoore</p>
+          <p style="margin:4px 0 0;color:#bbf7d0;font-size:13px;">Password reset</p>
+        </td>
+      </tr>
+      <tr><td style="padding:32px;text-align:center;">
+        <p style="margin:0 0 16px;color:#374151;font-size:14px;">Your password reset code is:</p>
+        <p style="margin:0 0 16px;font-size:36px;font-weight:700;letter-spacing:8px;color:#14532d;">${code}</p>
+        <p style="margin:0;color:#9ca3af;font-size:12px;">This code expires in 10 minutes. If you didn't request a reset, you can safely ignore this email — your password is unchanged.</p>
+      </td></tr>
+    </table>
+  </td></tr>
+</table>
+</body></html>`,
+    }, true);
+
+    logger.info({ email: maskEmail(normalisedEmail) },
+      '[AdminAuth] Password reset code sent');
+
+    return { message: GENERIC_MSG };
+  },
+
+  /**
+   * resetPassword — verifies the emailed code and sets a new password.
+   *
+   * The email is the proven identity here, so the new password applies to
+   * every active admin/treasurer account under that email (one per org).
+   */
+  async resetPassword(email: string, code: string, newPassword: string): Promise<{ message: string }> {
+    const normalisedEmail = normaliseEmail(email);
+
+    await otpService.checkValid(normalisedEmail, code);
+
+    const admins = await queryMany<{ id: string; org_id: string; email: string }>(
+      `SELECT id, org_id, email FROM admin_users
+       WHERE LOWER(email) = LOWER($1) AND is_active = TRUE`,
+      [normalisedEmail],
+    );
+    if (admins.length === 0) {
+      // Code was valid but no active account — same shape as a bad code
+      throw Errors.badRequest('OTP expired or not found. Please request a new code.');
+    }
+
+    await otpService.consume(normalisedEmail);
+
+    const hash = await this.hashPassword(newPassword);
+    await queryOne(
+      `UPDATE admin_users SET bcrypt_hash = $2, updated_at = NOW()
+       WHERE LOWER(email) = LOWER($1) AND is_active = TRUE`,
+      [normalisedEmail, hash],
+    );
+
+    for (const admin of admins) {
+      await auditService.record({
+        org_id:      admin.org_id,
+        actor_type:  'ADMIN',
+        actor_id:    admin.id,
+        actor_email: normalisedEmail,
+        action:      'ADMIN_PASSWORD_RESET',
+        entity_type: 'admin_user',
+        entity_id:   admin.id,
+        metadata:    { via: 'email_otp' },
+      });
+    }
+
+    logger.info({ email: maskEmail(normalisedEmail), accounts: admins.length },
+      '[AdminAuth] Password reset completed');
+
+    return { message: 'Password updated. You can now sign in with your new password.' };
   },
 
   /**

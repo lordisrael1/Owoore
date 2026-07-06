@@ -32,6 +32,20 @@ export const authController = {
     res.json({ success: true, data: result });
   }),
 
+  // POST /auth/admin/forgot-password — emails a reset code (never reveals account existence)
+  adminForgotPassword: catchAsync(async (req: Request, res: Response) => {
+    const { email } = req.body;
+    const result = await adminAuthService.requestPasswordReset(email);
+    res.json({ success: true, data: result });
+  }),
+
+  // POST /auth/admin/reset-password — verifies the code, sets the new password
+  adminResetPassword: catchAsync(async (req: Request, res: Response) => {
+    const { email, code, new_password } = req.body;
+    const result = await adminAuthService.resetPassword(email, code, new_password);
+    res.json({ success: true, data: result });
+  }),
+
   // POST /auth/refresh — exchanges a refresh token for a new access token
   refresh: catchAsync(async (req: Request, res: Response) => {
     const { token } = req.body;
