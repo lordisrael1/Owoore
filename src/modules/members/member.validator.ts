@@ -1,8 +1,9 @@
 import { z } from 'zod';
+import { safeText } from '../../utils/sanitize';
 
 export const memberJoinSchema = z.object({
   email:        z.string().email('Enter a valid email address'),
-  display_name: z.string().min(1, 'Name is required').max(100),
+  display_name: safeText(z.string().min(1, 'Name is required').max(100)),
 });
 
 export const memberParamsSchema = z.object({

@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { logger } from './utils/logger';
-import { startWebhookWorker, stopQueue } from './queue/webhook.queue';
+import { startWebhookWorker, startDeadLetterWorker, stopQueue } from './queue/webhook.queue';
 
 /**
  * worker.ts — dedicated queue-worker entry point.
@@ -19,6 +19,7 @@ async function main(): Promise<void> {
   logger.info('[Worker] Starting dedicated webhook worker...');
 
   await startWebhookWorker();
+  await startDeadLetterWorker();
 
   const shutdown = async (signal: string): Promise<void> => {
     logger.info({ signal }, '[Worker] Shutdown signal received');

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { safeText } from '../../utils/sanitize';
 
 export const sendOtpSchema = z.object({
   email:    z.string().email('Enter a valid email address'),
@@ -9,7 +10,7 @@ export const verifyOtpSchema = z.object({
   email:    z.string().email('Enter a valid email address'),
   code:     z.string().length(6, 'OTP must be 6 digits').regex(/^\d{6}$/, 'OTP must be numeric'),
   org_slug: z.string().min(1, 'org_slug is required'),
-  name:     z.string().min(2, 'Name must be at least 2 characters').max(100).optional(),
+  name:     safeText(z.string().min(2, 'Name must be at least 2 characters').max(100)).optional(),
 });
 
 export const adminLoginSchema = z.object({

@@ -2,6 +2,7 @@ import { queryOne, query } from '../../db';
 import { signatoryRepository } from './signatories.repository';
 import { Errors } from '../../utils/AppError';
 import { logger } from '../../utils/logger';
+import { sanitizeText } from '../../utils/sanitize';
 
 /**
  * signatory.service.ts
@@ -37,6 +38,11 @@ export const signatoryService = {
     can_initiate?: boolean;
     can_approve?:  boolean;
   }) {
+    // The signatory routes have no zod validator layer, so strip any HTML
+    // here — name/role land verbatim in approval-request emails later.
+    input.name = sanitizeText(input.name);
+    input.role = sanitizeText(input.role);
+
     // Prevent duplicate email within same org
     const existing = await signatoryRepository.findByEmail(input.email, orgId);
     if (existing) {
@@ -78,6 +84,9 @@ export const signatoryService = {
   }) {
     const signatory = await signatoryRepository.findById(id, orgId);
     if (!signatory) throw Errors.notFound('Signatory');
+
+    if (fields.name !== undefined) fields.name = sanitizeText(fields.name);
+    if (fields.role !== undefined) fields.role = sanitizeText(fields.role);
 
     const updated = await signatoryRepository.update(id, orgId, fields);
     logger.info({ signatory_id: id }, '[SignatoryService] Signatory updated');

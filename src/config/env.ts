@@ -33,6 +33,10 @@ const envSchema = z.object({
   RESEND_API_KEY: z.string().min(1, 'RESEND_API_KEY is required'),
   RESEND_FROM_ADDRESS: z.string().email().default('noreply@owoore.ng'),
   RESEND_FROM_NAME: z.string().default('Owoore'),
+  // Ops inbox for operational alerts (e.g. a webhook event that exhausted
+  // all retries and landed in the dead-letter queue). Optional: when unset
+  // the alert is still logged at ERROR level, just not emailed.
+  OPS_ALERT_EMAIL: z.string().email().optional(),
 
   // ── Cloudinary ────────────────────────────────────────────
   CLOUDINARY_CLOUD_NAME: z.string().min(1, 'CLOUDINARY_CLOUD_NAME is required'),

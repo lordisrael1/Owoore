@@ -1,8 +1,9 @@
 import { z } from 'zod';
+import { safeText } from '../../utils/sanitize';
 
 export const inviteSchema = z.object({
   email: z.string().email('A valid email address is required'),
-  name:  z.string().min(2, 'Name must be at least 2 characters').max(255),
+  name:  safeText(z.string().min(2, 'Name must be at least 2 characters').max(255)),
   role:  z.enum(['TREASURER', 'ADMIN']).default('TREASURER'),
 });
 

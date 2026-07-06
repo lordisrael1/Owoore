@@ -5,7 +5,7 @@ import { initNomba }       from './config/nomba';
 import { testResendConnection } from './config/resend';
 import { warmBankCache }   from './modules/payouts/bank-lookup.service';
 import { startScheduler }  from './jobs/scheduler';
-import { startWebhookWorker, stopQueue } from './queue/webhook.queue';
+import { startWebhookWorker, startDeadLetterWorker, stopQueue } from './queue/webhook.queue';
 import { env }             from './config/env';
 import { logger }          from './utils/logger';
 
@@ -62,6 +62,9 @@ async function bootstrap(): Promise<void> {
   // Runs in-process by default; can also run as a dedicated service via
   // `npm run worker` — pg-boss handles multiple consumers safely.
   await startWebhookWorker();
+
+  // ── Step 8: Start dead-letter worker (alerts on permanently-failed events)
+  await startDeadLetterWorker();
 
   // ── Graceful shutdown ─────────────────────────────────────────────────
   // Railway sends SIGTERM ~10s before forceful kill on deploy

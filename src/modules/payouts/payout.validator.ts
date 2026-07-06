@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { safeText } from '../../utils/sanitize';
 
 /**
  * payout.validator.ts — Zod schemas for payout request endpoints.
@@ -11,9 +12,9 @@ export const initPayoutSchema = z.object({
   amount:           z.number({ error: 'amount is required' })
                      .positive('amount must be greater than zero')
                      .max(100_000_000, 'amount cannot exceed ₦1,000,000 per request'),
-  purpose:          z.string()
+  purpose:          safeText(z.string()
                      .min(5,   'purpose must be at least 5 characters')
-                     .max(500, 'purpose cannot exceed 500 characters'),
+                     .max(500, 'purpose cannot exceed 500 characters')),
 });
 
 export const payoutParamsSchema = z.object({

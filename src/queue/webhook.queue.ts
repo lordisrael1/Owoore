@@ -27,9 +27,20 @@ import { webhookProcessor } from '../modules/webhooks/webhook.processor';
  * webhook_log, written by the processor — whose UNIQUE constraint on
  * nomba_request_id remains the REAL idempotency guarantee. The
  * singletonKey dedupe here is only a fast-path filter.
+ *
+ * DEAD-LETTER: a job that throws through all its retries is not left to
+ * be archived and purged (which would silently lose an event we already
+ * ACKed to Nomba). Instead pg-boss re-enqueues it — original event data
+ * intact — onto NOMBA_EVENTS_DEAD_QUEUE. That dead job is a normal row
+ * in the SAME pgboss.job table (differentiated by the `name` column), so
+ * it survives restarts exactly like any other job. startDeadLetterWorker
+ * consumes that queue purely to ALERT: it never re-runs the processor, so
+ * a poison event can't loop. Operators fix the root cause, then replay by
+ * re-sending the held data to NOMBA_EVENTS_QUEUE.
  */
 
-export const NOMBA_EVENTS_QUEUE = 'nomba-events';
+export const NOMBA_EVENTS_QUEUE      = 'nomba-events';
+export const NOMBA_EVENTS_DEAD_QUEUE = 'nomba-events-dead';
 
 // Guards against a HANGING database, not a slow one — a timeout surfaces
 // as a 500 and Nomba retries, which is the correct fallback either way.
@@ -57,16 +68,27 @@ function getBoss(): Promise<PgBoss> {
 
       await boss.start();
 
+      // The dead-letter queue MUST exist before the main queue references
+      // it (pg-boss resolves the deadLetter name at createQueue time). No
+      // retry policy here — a dead job is terminal; it waits for an
+      // operator, it is not auto-retried.
+      await boss.createQueue(NOMBA_EVENTS_DEAD_QUEUE);
+
       // Idempotent — also carries the retry policy for every job sent here.
       // policy 'short' = one QUEUED job per singletonKey → duplicate Nomba
       // deliveries are suppressed while the first is still waiting. Every
       // send MUST carry a singletonKey (enforced by enqueueNombaEvent's
       // signature) — a key-less job would collapse dedupe queue-wide.
+      //
+      // deadLetter: after retryLimit is exhausted the job is moved here
+      // (data intact) instead of just being flagged 'failed' and later
+      // purged — so an event we already ACKed to Nomba is never lost.
       await boss.createQueue(NOMBA_EVENTS_QUEUE, {
         policy:       'short',
         retryLimit:   5,
         retryDelay:   3,     // seconds; with backoff: ~3s, 6s, 12s, 24s, 48s
         retryBackoff: true,
+        deadLetter:   NOMBA_EVENTS_DEAD_QUEUE,
       });
 
       bossInstance = boss;
@@ -129,6 +151,76 @@ export async function startWebhookWorker(): Promise<void> {
   });
 
   logger.info({ queue: NOMBA_EVENTS_QUEUE }, '[Queue] Webhook worker listening');
+}
+
+/**
+ * startDeadLetterWorker — consumes the dead-letter queue to RAISE AN
+ * ALERT, nothing more. It deliberately does NOT call webhookProcessor:
+ * these jobs already failed every retry, so re-running here would just
+ * loop a poison event. The job stays durable in pgboss (dead queue) for
+ * an operator to inspect and replay.
+ *
+ * The alert is best-effort: a failed email must not fail the dead-letter
+ * job (that would ping-pong it). We log at ERROR unconditionally — that
+ * line is the durable signal even if email is down — and email on top
+ * when OPS_ALERT_EMAIL is configured.
+ */
+export async function startDeadLetterWorker(): Promise<void> {
+  const boss = await getBoss();
+
+  await boss.work<Record<string, unknown>>(NOMBA_EVENTS_DEAD_QUEUE, async (jobs) => {
+    for (const job of jobs) {
+      const event     = job.data ?? {};
+      const requestId = (event as any)?.requestId ?? 'unknown';
+      const eventType = (event as any)?.event_type ?? (event as any)?.event ?? 'unknown';
+
+      // ERROR-level log is the guaranteed, queryable signal.
+      logger.error({
+        dead_job_id:      job.id,
+        nomba_request_id: requestId,
+        event_type:       eventType,
+      }, '[Queue] Webhook event exhausted all retries — moved to dead-letter queue, manual review needed');
+
+      await alertDeadLetterEvent({ jobId: String(job.id), requestId, eventType })
+        .catch((err) =>
+          logger.warn({ err: err.message, dead_job_id: job.id },
+            '[Queue] Dead-letter alert email failed — event still held in dead queue'));
+    }
+  });
+
+  logger.info({ queue: NOMBA_EVENTS_DEAD_QUEUE }, '[Queue] Dead-letter worker listening');
+}
+
+/**
+ * alertDeadLetterEvent — emails the ops inbox that a webhook permanently
+ * failed. No-op (beyond the caller's ERROR log) when OPS_ALERT_EMAIL is
+ * unset, so local/dev runs don't need Resend wired up.
+ */
+async function alertDeadLetterEvent(params: {
+  jobId:     string;
+  requestId: string;
+  eventType: string;
+}): Promise<void> {
+  const { env } = await import('../config/env');
+  if (!env.OPS_ALERT_EMAIL) return;
+
+  const { notificationDispatcher } = await import('../modules/webhooks/notification.dispatcher');
+
+  await notificationDispatcher.sendEmail({
+    to:      env.OPS_ALERT_EMAIL,
+    subject: `[Owoore] Webhook event failed permanently — ${params.eventType}`,
+    html: `
+      <p>A Nomba webhook event exhausted all processing retries and was moved to the
+      dead-letter queue. It is held durably in Postgres (pgboss.job, queue
+      <code>${NOMBA_EVENTS_DEAD_QUEUE}</code>) and will NOT be retried automatically.</p>
+      <ul>
+        <li><strong>Event type:</strong> ${params.eventType}</li>
+        <li><strong>Nomba request id:</strong> ${params.requestId}</li>
+        <li><strong>Dead job id:</strong> ${params.jobId}</li>
+      </ul>
+      <p>Investigate the processor failure, fix the root cause, then replay by
+      re-enqueuing the held job data onto <code>${NOMBA_EVENTS_QUEUE}</code>.</p>`,
+  });
 }
 
 /** Graceful shutdown — lets in-flight jobs finish, then closes. */

@@ -1,9 +1,10 @@
 import { z } from 'zod';
+import { safeText } from '../../utils/sanitize';
 
 export const createFundSchema = z.object({
-  name: z.string().min(2, 'Fund name must be at least 2 characters').max(255),
+  name: safeText(z.string().min(2, 'Fund name must be at least 2 characters').max(255)),
   kind: z.enum(['RECURRING', 'CAMPAIGN']).default('RECURRING'),
-  description:       z.string().max(500).optional(),
+  description:       safeText(z.string().max(500)).optional(),
   expected_amt:      z.number().positive('Expected amount must be positive').optional(),
   expires_at:        z.string().datetime().optional(),
 }).refine(
@@ -12,8 +13,8 @@ export const createFundSchema = z.object({
 );
 
 export const updateFundSchema = z.object({
-  name:         z.string().min(2).max(255).optional(),
-  description:  z.string().max(500).optional(),
+  name:         safeText(z.string().min(2).max(255)).optional(),
+  description:  safeText(z.string().max(500)).optional(),
   expected_amt: z.number().positive().optional(),
   expires_at:   z.string().datetime().optional(),
   sort_order:   z.number().int().min(0).optional(),
