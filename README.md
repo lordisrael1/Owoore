@@ -35,7 +35,7 @@ Church giving in Nigeria today is mostly cash in envelopes, or a single shared b
 - **No governance** — one person with the bank token can move everything.
 - **No records** — members never get a statement of their giving.
 
-DropTithe fixes all four with one primitive: **a dedicated virtual account per member per fund**. When money lands on that account, we already know *who* paid, *which* fund it was for, and *whether it matches* the expected amount — before a human ever looks at it.
+Owoore fixes all four with one primitive: **a dedicated virtual account per member per fund**. When money lands on that account, we already know *who* paid, *which* fund it was for, and *whether it matches* the expected amount — before a human ever looks at it.
 
 ## How it works
 
