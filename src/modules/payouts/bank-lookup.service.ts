@@ -2,6 +2,7 @@ import { nombaClient } from '../../config/nomba';
 import { env } from '../../config/env';
 import { logger } from '../../utils/logger';
 import { AppError, Errors } from '../../utils/AppError';
+import axios from 'axios';
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -28,6 +29,26 @@ interface BankCache {
 
 let bankCache: BankCache | null = null;
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const BANK_LIST_MAX_ATTEMPTS = 3;
+
+const wait = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * A bank-list read is safe to retry when the upstream closes the connection
+ * mid-response. Do not retry business/API errors, which need operator action.
+ */
+function isRetryableBankListError(err: unknown): boolean {
+  if (!axios.isAxiosError(err)) return false;
+
+  return [
+    'ECONNABORTED',
+    'ECONNRESET',
+    'ERR_CANCELED',
+    'ERR_NETWORK',
+    'ERR_BAD_RESPONSE',
+  ].includes(err.code ?? '') || /\baborted\b/i.test(err.message);
+}
 
 // ── Bank list ─────────────────────────────────────────────────────────────
 
@@ -50,9 +71,34 @@ export async function getAllBanks(): Promise<NombaBank[]> {
   logger.info('[BankLookup] Fetching bank list from Nomba GET /v1/transfers/banks');
 
   try {
-    const response = await nombaClient.get('/transfers/banks', {
-      headers: { accountId: env.NOMBA_ACCOUNT_ID },
-    });
+    let response;
+    for (let attempt = 1; attempt <= BANK_LIST_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        response = await nombaClient.get('/transfers/banks', {
+          headers: { accountId: env.NOMBA_ACCOUNT_ID },
+        });
+        break;
+      } catch (err) {
+        if (!isRetryableBankListError(err) || attempt === BANK_LIST_MAX_ATTEMPTS) {
+          throw err;
+        }
+
+        const delayMs = attempt * 1_000;
+        const message = err instanceof Error ? err.message : String(err);
+        logger.warn({
+          attempt,
+          maxAttempts: BANK_LIST_MAX_ATTEMPTS,
+          delayMs,
+          err: message,
+          code: axios.isAxiosError(err) ? err.code : undefined,
+          status: axios.isAxiosError(err) ? err.response?.status : undefined,
+        }, '[BankLookup] Bank-list request interrupted; retrying');
+        await wait(delayMs);
+      }
+    }
+
+    // The loop either returned a response or threw its final error.
+    if (!response) throw new Error('Nomba bank-list request returned no response');
 
     const { code, data } = response.data;
 
@@ -77,7 +123,11 @@ export async function getAllBanks(): Promise<NombaBank[]> {
     return banks;
 
   } catch (err: any) {
-    logger.error({ err: err.message }, '[BankLookup] Failed to fetch bank list');
+    logger.error({
+      err: err.message,
+      code: axios.isAxiosError(err) ? err.code : undefined,
+      status: axios.isAxiosError(err) ? err.response?.status : undefined,
+    }, '[BankLookup] Failed to fetch bank list');
 
     // Stale cache is better than crashing
     if (bankCache) {
