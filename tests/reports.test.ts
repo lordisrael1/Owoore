@@ -44,6 +44,19 @@ describe('GET /api/v1/orgs/:orgId/reports/giving', () => {
     expect(res.headers['content-disposition']).toContain('attachment');
     expect(res.headers['content-disposition']).toContain('.csv');
   });
+
+  it('returns a fund-summary CSV when view=summary', async () => {
+    const res = await request(app)
+      .get(`/api/v1/orgs/${orgId}/reports/giving?format=csv&view=summary&period=2026-07`)
+      .set('Authorization', bearer(adminToken));
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('text/csv');
+    expect(res.headers['content-disposition']).toContain('fund-summary');
+    // Board-report columns, not the per-member detail header
+    expect(res.text.split('\n')[0]).toContain('Collected (₦)');
+    expect(res.text.split('\n')[0]).toContain('Givers');
+  });
 });
 
 describe('GET /api/v1/members/:id/statement', () => {

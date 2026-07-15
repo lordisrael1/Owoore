@@ -22,6 +22,22 @@ import { Errors } from '../utils/AppError';
  * From Nomba docs:
  *   "Verify the nomba-signature HMAC before doing anything else."
  */
+// Replay window: a captured, validly-signed webhook must not be
+// acceptable forever. ±5 min absorbs clock skew and Nomba redelivery
+// latency while bounding how long a recorded request stays usable.
+const TIMESTAMP_SKEW_MS = 5 * 60 * 1000;
+
+/** Parses epoch seconds, epoch millis, or an ISO date string. */
+function parseWebhookTimestamp(raw: string): number | null {
+  const asNumber = Number(raw);
+  if (Number.isFinite(asNumber)) {
+    // Heuristic: epoch seconds are 10 digits until year 2286, millis 13
+    return asNumber < 1e12 ? asNumber * 1000 : asNumber;
+  }
+  const asDate = Date.parse(raw);
+  return Number.isNaN(asDate) ? null : asDate;
+}
+
 export function webhookVerify(req: Request, _res: Response, next: NextFunction): void {
   const signature = req.headers['nomba-signature']  as string | undefined;
   const timestamp = req.headers['nomba-timestamp']   as string | undefined;
@@ -36,6 +52,16 @@ export function webhookVerify(req: Request, _res: Response, next: NextFunction):
     logger.warn({ path: req.path, ip: req.ip },
       'Webhook received without nomba-timestamp header — rejected');
     return next(Errors.unauthorized('Missing nomba-timestamp header'));
+  }
+
+  // Freshness BEFORE signature work: the timestamp is part of the signed
+  // payload, so a tampered timestamp fails the HMAC anyway — this check
+  // only bounds REPLAY of a genuinely-signed capture.
+  const ts = parseWebhookTimestamp(timestamp);
+  if (ts === null || Math.abs(Date.now() - ts) > TIMESTAMP_SKEW_MS) {
+    logger.warn({ path: req.path, ip: req.ip, timestamp },
+      'Webhook timestamp outside freshness window — rejected (possible replay)');
+    return next(Errors.unauthorized('Webhook timestamp outside acceptable window'));
   }
 
   const rawBody = req.body as Buffer;

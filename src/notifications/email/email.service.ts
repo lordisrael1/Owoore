@@ -1,5 +1,6 @@
 import { resend, FROM_ADDRESS } from '../../config/resend';
 import { logger } from '../../utils/logger';
+import { env } from '../../config/env';
 
 /**
  * email.service.ts
@@ -47,6 +48,14 @@ export const emailService = {
     const { to, subject, html, replyTo, tags } = input;
     const toArr   = Array.isArray(to) ? to : [to];
     const masked  = toArr.map(maskEmail).join(', ');
+
+    // Test runs must never dispatch real email — it burns Resend quota and
+    // can deliver OTPs/invites to addresses nobody owns. Every sender in the
+    // codebase goes through this function, so this is the single gate.
+    if (env.NODE_ENV === 'test') {
+      logger.debug({ to: masked, subject }, '[Email] Suppressed in test env');
+      return { success: true, id: 'test-suppressed' };
+    }
 
     try {
       const result = await resend.emails.send({

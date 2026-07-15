@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    // Type-checking only — tsx executes the TypeScript directly, so this
+    // config exists for `npm run typecheck` (and editors), never for emit.
+    "noEmit": true,
+
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "types": ["node"],
+    "resolveJsonModule": true,
+
+    // Strict: financial code — catch naira/kobo mixups, unhandled nulls,
+    // and misshapen Nomba payloads before any test runs.
+    "strict": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true
+  },
+  "include": ["src", "tests", "vitest.config.ts"]
+}

@@ -1,5 +1,4 @@
 import { queryMany, queryOne } from '../../db';
-import { fromKobo } from '../../utils/kobo';
 import { formatNaira, formatPeriod } from '../../utils/formatMoney';
 import { reconciliationService } from '../transactions/reconciliation.service';
 import { Errors } from '../../utils/AppError';
@@ -51,9 +50,12 @@ export const reportService = {
          AND fl.period_month LIKE $2
          ${options.fund_type_id ? 'AND fl.fund_type_id = $3' : ''}
        ORDER BY ft.sort_order ASC, fl.period_month ASC`,
+      // periodFilter, not the raw year pattern: a ?period=YYYY-MM request
+      // previously computed the filter and then ignored it — the report
+      // echoed the requested period while returning the whole year.
       options.fund_type_id
-        ? [orgId, `${targetYear}-%`, options.fund_type_id]
-        : [orgId, `${targetYear}-%`],
+        ? [orgId, periodFilter, options.fund_type_id]
+        : [orgId, periodFilter],
     );
 
     // Arrears — members with outstanding balances

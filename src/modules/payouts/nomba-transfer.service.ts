@@ -316,6 +316,9 @@ export const nombaTransferService = {
         amountKobo:   payout.amount_kobo,
         feeKobo,
         period:       currentPeriod(),
+        // Release the reservation from the row it was locked on — may be
+        // an earlier month than the debit row
+        lockedPeriod: payout.locked_period_month,
       });
     });
 
@@ -400,6 +403,7 @@ export const nombaTransferService = {
       org_id:       payout.org_id,
       fund_type_id: payout.fund_type_id,
       amountKobo:   payout.amount_kobo,
+      lockedPeriod: payout.locked_period_month,
     });
 
     logger.warn({
@@ -408,6 +412,12 @@ export const nombaTransferService = {
       amount_kobo: payout.amount_kobo,
       reason,
     }, '[NombaTransfer] Payout FAILED — soft lock released, funds available for retry');
+
+    const { alertPayoutFailure } = await import('../../notifications/ops-alert.service');
+    await alertPayoutFailure({
+      payoutId: payout.id, orgId: payout.org_id, amountKobo: payout.amount_kobo,
+      reason, path: 'WEBHOOK',
+    });
 
     const { auditService } = await import('../audit/audit.service');
     await auditService.record({

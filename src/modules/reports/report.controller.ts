@@ -4,18 +4,36 @@ import { reportService } from './report.service';
 import { csvService } from './csv.service';
 
 export const reportController = {
-  // GET /orgs/:orgId/reports/giving?year=2026&period=2026-06&fund_type_id=xxx
+  // GET /orgs/:orgId/reports/giving?year=2026&period=2026-06&fund_type_id=xxx&format=csv&view=summary
+  //
+  // Two CSV shapes for two different questions a church asks:
+  //   view=detailed (default) → one row per member payment  (reconciliation)
+  //   view=summary            → one row per fund per month   (board report)
   getOrgGiving: catchAsync(async (req: Request, res: Response) => {
     const user = (req as any).user;
-    const { period, fund_type_id, year, format } = req.query as Record<string, string>;
+    const { period, fund_type_id, year, format, view } = req.query as Record<string, string>;
 
     if (format === 'csv') {
+      const scope = period ?? (year ?? 'all');
+
+      if (view === 'summary') {
+        const csv = await csvService.generateFundSummary(user.orgId, {
+          period,
+          year: year ? Number(year) : undefined,
+        });
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition',
+          `attachment; filename="owoore-fund-summary-${scope}.csv"`);
+        res.send(csv);
+        return;
+      }
+
       const csv = await csvService.generateGivingStatement(user.orgId, {
         period, fund_type_id,
       });
       res.setHeader('Content-Type', 'text/csv');
       res.setHeader('Content-Disposition',
-        `attachment; filename="owoore-giving-${period ?? 'all'}.csv"`);
+        `attachment; filename="owoore-giving-${scope}.csv"`);
       res.send(csv);
       return;
     }

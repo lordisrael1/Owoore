@@ -1,4 +1,4 @@
-import { query, queryOne, queryMany, withTransaction } from '../../db';
+import { queryOne, queryMany } from '../../db';
 import { PayoutStatus } from './payout-state.machine';
 
 /**
@@ -21,6 +21,7 @@ export interface PayoutRequest {
   declined_by:        string | null;
   executed_at:        Date   | null;
   expires_at:         Date;
+  locked_period_month: string | null; // fund_ledger row the soft_lock targets
   created_at:         Date;
   updated_at:         Date;
 }
@@ -47,6 +48,90 @@ export const payoutRepository = {
       ],
     );
     return row!;
+  },
+
+  /**
+   * createTx — create inside the caller's transaction, atomically with
+   * ledgerService.checkAndLock. Persists the locked ledger period so
+   * every later release/debit targets the same row.
+   */
+  async createTx(client: import('pg').PoolClient, input: {
+    org_id:              string;
+    fund_type_id:        string;
+    bank_account_id:     string;
+    initiated_by:        string;
+    amount_kobo:         number;
+    purpose:             string;
+    expires_at:          Date;
+    locked_period_month: string;
+  }): Promise<PayoutRequest> {
+    const res = await client.query<PayoutRequest>(
+      `INSERT INTO payout_requests
+         (org_id, fund_type_id, bank_account_id, initiated_by,
+          amount_kobo, purpose, status, expires_at, locked_period_month,
+          created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,'PENDING',$7,$8,NOW(),NOW())
+       RETURNING *`,
+      [
+        input.org_id, input.fund_type_id, input.bank_account_id,
+        input.initiated_by, input.amount_kobo, input.purpose,
+        input.expires_at, input.locked_period_month,
+      ],
+    );
+    return res.rows[0];
+  },
+
+  /**
+   * transitionStatus — atomic compare-and-set state transition.
+   *
+   * Only succeeds when the row is STILL in one of fromStatuses at write
+   * time — the DB enforces the state machine under concurrency, not a
+   * stale in-memory read. Returns the updated row, or null when another
+   * actor (a concurrent approver, the expiry job) advanced it first;
+   * callers must treat null as "someone else won — do not proceed".
+   */
+  async transitionStatus(
+    id: string,
+    fromStatuses: PayoutStatus[],
+    to: PayoutStatus,
+    extra?: {
+      nomba_transfer_ref?: string;
+      nomba_transfer_id?:  string;
+      transfer_error?:     string;
+      declined_by?:        string;
+      approvals_received?: number;
+    },
+  ): Promise<PayoutRequest | null> {
+    const sets: string[] = ['status = $2', 'updated_at = NOW()'];
+    const params: unknown[] = [id, to, fromStatuses];
+
+    if (extra?.nomba_transfer_ref !== undefined) {
+      params.push(extra.nomba_transfer_ref);
+      sets.push(`nomba_transfer_ref = $${params.length}`);
+    }
+    if (extra?.nomba_transfer_id !== undefined) {
+      params.push(extra.nomba_transfer_id);
+      sets.push(`nomba_transfer_id = $${params.length}`);
+    }
+    if (extra?.transfer_error !== undefined) {
+      params.push(extra.transfer_error);
+      sets.push(`transfer_error = $${params.length}`);
+    }
+    if (extra?.declined_by !== undefined) {
+      params.push(extra.declined_by);
+      sets.push(`declined_by = $${params.length}`);
+    }
+    if (extra?.approvals_received !== undefined) {
+      params.push(extra.approvals_received);
+      sets.push(`approvals_received = $${params.length}`);
+    }
+
+    return queryOne<PayoutRequest>(
+      `UPDATE payout_requests SET ${sets.join(', ')}
+       WHERE id = $1 AND status = ANY($3)
+       RETURNING *`,
+      params,
+    );
   },
 
   async findById(id: string, org_id: string): Promise<PayoutRequest & {

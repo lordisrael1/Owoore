@@ -1,4 +1,4 @@
-import cron from 'node-cron';
+import cron, { type ScheduledTask } from 'node-cron';
 import { logger } from '../utils/logger';
 import { runSweepJob }           from './sweep.job';
 import { runReconciliationJob }  from './reconciliation.job';
@@ -21,7 +21,7 @@ import { runReminderJob }        from './reminder.job';
 interface ScheduledJob {
   name:     string;
   schedule: string;
-  task:     cron.ScheduledTask;
+  task:     ScheduledTask;
 }
 
 const jobs: ScheduledJob[] = [];

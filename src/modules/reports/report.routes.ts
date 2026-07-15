@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { authenticateAdmin } from '../../middleware/authenticate';
+import { requireRole, scopeToOrg } from '../../middleware/authorise';
 import { reportController } from './report.controller';
 
 /**
@@ -14,8 +15,14 @@ import { reportController } from './report.controller';
  */
 const router = Router();
 
-router.get('/orgs/:orgId/reports/giving',  authenticateAdmin, reportController.getOrgGiving);
-router.get('/members/:id/statement',       authenticateAdmin, reportController.getMemberStatement);
-router.get('/reports/arrears',             authenticateAdmin, reportController.getArrears);
+// Reports expose org-wide financials and member PII — gate to
+// ADMIN/TREASURER (authenticateAdmin alone also admits SIGNATORY).
+// scopeToOrg only where the route carries :orgId; the member-statement
+// route's :id is a MEMBER id, which the controller org-scopes internally.
+const reportRole = requireRole(['ADMIN', 'TREASURER']);
+
+router.get('/orgs/:orgId/reports/giving',  authenticateAdmin, reportRole, scopeToOrg, reportController.getOrgGiving);
+router.get('/members/:id/statement',       authenticateAdmin, reportRole, reportController.getMemberStatement);
+router.get('/reports/arrears',             authenticateAdmin, reportRole, reportController.getArrears);
 
 export default router;

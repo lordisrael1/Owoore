@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { authenticateAdmin } from '../../middleware/authenticate';
-import { requireRole, scopeToOrg } from '../../middleware/authorise';
+import { requireRole } from '../../middleware/authorise';
 import { validateBody, validateParams } from '../../middleware/validateRequest';
 import { createFundSchema, updateFundSchema, fundParamsSchema } from './fund.validator';
 import { fundController } from './fund.controller';

@@ -50,34 +50,56 @@ async function expirePayoutRequests(): Promise<void> {
     // Find all overdue PENDING/PARTIAL requests
     const expired = await queryMany<{
       id: string; org_id: string; fund_type_id: string; amount_kobo: number;
+      locked_period_month: string | null;
     }>(
-      `SELECT id, org_id, fund_type_id, amount_kobo FROM payout_requests
+      `SELECT id, org_id, fund_type_id, amount_kobo, locked_period_month
+       FROM payout_requests
        WHERE status IN ('PENDING','PARTIAL')
          AND expires_at < NOW()`,
     );
 
     if (expired.length === 0) return;
 
+    let expiredCount = 0;
     for (const req of expired) {
-      // Mark as EXPIRED
-      await query(
-        `UPDATE payout_requests SET status = 'EXPIRED', updated_at = NOW() WHERE id = $1`,
+      // COMPARE-AND-SET, not a blind write: between our SELECT and this
+      // UPDATE a signatory can approve (status → APPROVED → TRANSFERRING,
+      // real money moving). Stomping that to EXPIRED and releasing the
+      // lock would make the later transfer.success webhook drop its ledger
+      // debit — money leaves the wallet with no record. Only a row still
+      // PENDING/PARTIAL may expire; otherwise skip and touch nothing.
+      const updated = await query(
+        `UPDATE payout_requests
+         SET status = 'EXPIRED', updated_at = NOW()
+         WHERE id = $1 AND status IN ('PENDING','PARTIAL')
+         RETURNING id`,
         [req.id],
       );
 
-      // Release soft lock — funds back in available balance
-      await query(
-        `UPDATE fund_ledger
-         SET soft_lock_kobo = GREATEST(0, soft_lock_kobo - $1), updated_at = NOW()
-         WHERE org_id = $2 AND fund_type_id = $3`,
-        [req.amount_kobo, req.org_id, req.fund_type_id],
-      );
+      if ((updated.rowCount ?? 0) === 0) {
+        logger.info({ payout_id: req.id },
+          '[ExpiryJob] Payout advanced during expiry sweep — skipped');
+        continue;
+      }
 
+      // Release soft lock — targeted at the exact period row it was
+      // applied to (the old unfiltered UPDATE subtracted the amount from
+      // EVERY period row of the fund).
+      const { ledgerService } = await import('../modules/transactions/ledger.service');
+      await ledgerService.releaseLock({
+        org_id:       req.org_id,
+        fund_type_id: req.fund_type_id,
+        amountKobo:   req.amount_kobo,
+        lockedPeriod: req.locked_period_month,
+      });
+
+      expiredCount++;
       logger.info({ payout_id: req.id, amount_kobo: req.amount_kobo },
         '[ExpiryJob] Payout request expired — soft lock released');
     }
 
-    logger.info({ count: expired.length }, '[ExpiryJob] Expired payout requests processed');
+    logger.info({ count: expiredCount, scanned: expired.length },
+      '[ExpiryJob] Expired payout requests processed');
   } catch (err: any) {
     logger.error({ err: err.message }, '[ExpiryJob] Payout expiry failed');
   }

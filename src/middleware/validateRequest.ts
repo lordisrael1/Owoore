@@ -35,8 +35,17 @@ export function validateRequest(
       );
     }
 
-    // Replace with parsed value — Zod coercion applied (e.g. string → number)
-    (req as any)[target] = result.data;
+    // Replace with parsed value — Zod coercion applied (e.g. string → number).
+    // Express 5 exposes req.query through a getter-only prototype accessor:
+    // plain assignment throws a TypeError in strict mode and silently no-ops
+    // in sloppy mode (discarding the parsed values either way).
+    // defineProperty shadows the accessor with an own data property.
+    Object.defineProperty(req, target, {
+      value:        result.data,
+      writable:     true,
+      enumerable:   true,
+      configurable: true,
+    });
     next();
   };
 }

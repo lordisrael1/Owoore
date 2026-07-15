@@ -3,8 +3,30 @@ import 'multer';
 import { catchAsync } from '../../utils/catchAsync';
 import { orgService } from './org.service';
 import { env } from '../../config/env';
-import { uploadToCloudinary, deleteFromCloudinary } from '../../config/cloudinary';
+import {
+  uploadToCloudinary,
+  deleteFromCloudinary,
+  publicIdFromCloudinaryUrl,
+} from '../../config/cloudinary';
 import { logger } from '../../utils/logger';
+import { Errors } from '../../utils/AppError';
+
+/**
+ * deleteOldLogo — best-effort cleanup of a replaced logo's Cloudinary
+ * asset. Runs AFTER the DB points at the new URL, so the worst case of
+ * a failed delete is a stray file in Cloudinary — never a broken logo.
+ */
+async function deleteOldLogo(oldUrl: string | null, newPublicId: string): Promise<void> {
+  if (!oldUrl) return;
+
+  const oldPublicId = publicIdFromCloudinaryUrl(oldUrl);
+  if (!oldPublicId || oldPublicId === newPublicId) return;
+
+  await deleteFromCloudinary(oldPublicId).catch((err) =>
+    logger.warn({ publicId: oldPublicId, err: err.message },
+      '[OrgController] Could not delete replaced logo from Cloudinary — orphaned asset'),
+  );
+}
 
 export const orgController = {
   // POST /orgs — register a new church
@@ -59,18 +81,28 @@ export const orgController = {
   // PATCH /orgs/:id — update church details (admin only)
   update: catchAsync(async (req: Request, res: Response) => {
     const { name } = req.body;
+    const orgId = req.params.id as string;
 
     let logoUrl: string | undefined;
     let logoPublicId: string | undefined;
+    let previousLogoUrl: string | null = null;
 
     if (req.file) {
+      // Capture the current logo BEFORE overwriting so it can be cleaned up
+      previousLogoUrl = (await orgService.getById(orgId)).logo_url;
+
       const uploaded = await uploadToCloudinary(req.file.buffer, 'droptithe/logos');
       logoUrl = uploaded.url;
       logoPublicId = uploaded.publicId;
     }
 
     try {
-      const updated = await orgService.update(req.params.id as string, { name, logo_url: logoUrl });
+      const updated = await orgService.update(orgId, { name, logo_url: logoUrl });
+
+      if (logoPublicId) {
+        await deleteOldLogo(previousLogoUrl, logoPublicId);
+      }
+
       res.json({ success: true, data: updated });
     } catch (err) {
       if (logoPublicId) {
@@ -80,5 +112,39 @@ export const orgController = {
       }
       throw err;
     }
+  }),
+
+  // PUT /orgs/:id/logo — replace the church logo (admin only).
+  // Uploads the new image, points the org at it, then deletes the
+  // previous Cloudinary asset so replaced logos don't pile up.
+  updateLogo: catchAsync(async (req: Request, res: Response) => {
+    if (!req.file) {
+      throw Errors.badRequest('No logo file provided — attach an image as multipart field "logo"');
+    }
+
+    const orgId = req.params.id as string;
+
+    // 404 before paying for the upload
+    const previousLogoUrl = (await orgService.getById(orgId)).logo_url;
+
+    const uploaded = await uploadToCloudinary(req.file.buffer, 'droptithe/logos');
+
+    let updated;
+    try {
+      updated = await orgService.update(orgId, { logo_url: uploaded.url });
+    } catch (err) {
+      // DB update failed — the new upload is the orphan; remove it
+      await deleteFromCloudinary(uploaded.publicId).catch((delErr) =>
+        logger.error({ publicId: uploaded.publicId, err: delErr },
+          '[OrgController] Failed to rollback Cloudinary upload'),
+      );
+      throw err;
+    }
+
+    await deleteOldLogo(previousLogoUrl, uploaded.publicId);
+
+    logger.info({ org_id: orgId, logo_url: uploaded.url }, '[OrgController] Logo replaced');
+
+    res.json({ success: true, data: updated });
   }),
 };

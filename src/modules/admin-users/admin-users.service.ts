@@ -11,7 +11,126 @@ import { auditService } from '../audit/audit.service';
 
 const INVITE_EXPIRY_HOURS = 72;
 
+export type TeamMemberStatus = 'ACTIVE' | 'INVITED' | 'INVITE_EXPIRED' | 'DEACTIVATED';
+
 export const adminUserService = {
+  /**
+   * listTeam — staff roster for the team management page.
+   * Status is derived, not stored:
+   *   ACTIVE         — can log in
+   *   INVITED        — invite sent, not yet accepted, link still valid
+   *   INVITE_EXPIRED — invite sent but the 72 h window passed
+   *   DEACTIVATED    — had an account, access revoked
+   */
+  async listTeam(orgId: string) {
+    const rows = await adminUserRepository.listByOrg(orgId);
+
+    return rows.map((r) => {
+      let status: TeamMemberStatus;
+      if (r.is_active) {
+        status = 'ACTIVE';
+      } else if (r.has_pending_invite) {
+        status = r.invite_expires_at && new Date() > new Date(r.invite_expires_at)
+          ? 'INVITE_EXPIRED'
+          : 'INVITED';
+      } else {
+        status = 'DEACTIVATED';
+      }
+
+      return {
+        id:               r.id,
+        name:             r.name,
+        email:            r.email,
+        role:             r.role,
+        status,
+        is_verified:      r.is_verified,
+        invited_by_name:  r.invited_by_name,
+        created_at:       r.created_at,
+      };
+    });
+  },
+
+  /**
+   * setActive — revoke or restore a team member's dashboard access.
+   *
+   * Guards (in order):
+   *   - target must exist in the actor's org (multi-tenant scope)
+   *   - the SYSTEM actor is untouchable
+   *   - you cannot deactivate yourself
+   *   - the last active ADMIN cannot be deactivated (org lockout)
+   *   - an account that never set a password cannot be "reactivated" —
+   *     resend the invite instead
+   */
+  async setActive(params: {
+    orgId:      string;
+    actorId:    string;
+    actorEmail: string;
+    targetId:   string;
+    isActive:   boolean;
+  }): Promise<{ id: string; is_active: boolean }> {
+    const { orgId, actorId, actorEmail, targetId, isActive } = params;
+
+    const target = await adminUserRepository.findByIdInOrg(targetId, orgId);
+    if (!target) throw Errors.notFound('Team member');
+
+    if (target.role === 'SYSTEM') {
+      throw Errors.forbidden('This account is managed by Owoore and cannot be changed.');
+    }
+
+    if (targetId === actorId && !isActive) {
+      throw Errors.badRequest('You cannot deactivate your own account.');
+    }
+
+    if (!isActive && target.role === 'ADMIN' && target.is_active) {
+      const activeAdmins = await adminUserRepository.countActiveAdmins(orgId);
+      if (activeAdmins <= 1) {
+        throw Errors.badRequest(
+          'This is the last active admin. Promote or invite another admin before deactivating this one.',
+        );
+      }
+    }
+
+    if (isActive && !target.bcrypt_hash) {
+      throw Errors.badRequest(
+        'This person has not accepted their invite yet — send a new invite instead.',
+      );
+    }
+
+    await adminUserRepository.setActive(targetId, orgId, isActive);
+
+    if (!isActive) {
+      // setActive already bumped token_version in the DB when isActive is
+      // false — evict the cached copy so the revoke takes effect on this
+      // person's very next request instead of waiting out the cache TTL.
+      const { evictAdminTokenVersionCache } = await import('../../config/jwt');
+      await evictAdminTokenVersionCache(targetId);
+    }
+
+    logger.info({
+      org_id:    orgId,
+      target_id: targetId,
+      is_active: isActive,
+      actor_id:  actorId,
+    }, `[AdminUsers] Account ${isActive ? 'reactivated' : 'deactivated'}`);
+
+    await auditService.record({
+      org_id:      orgId,
+      actor_type:  'ADMIN',
+      actor_id:    actorId,
+      actor_email: actorEmail,
+      action:      isActive ? 'ADMIN_REACTIVATED' : 'ADMIN_DEACTIVATED',
+      entity_type: 'admin_user',
+      entity_id:   targetId,
+      metadata: {
+        target_name:  target.name,
+        target_email: target.email,
+        target_role:  target.role,
+      },
+    });
+
+    return { id: targetId, is_active: isActive };
+  },
+
   async invite(params: {
     orgId:     string;
     email:     string;
@@ -143,10 +262,11 @@ export const adminUserService = {
 
     const { signAdminToken } = await import('../../config/jwt');
     const jwt = signAdminToken({
-      sub:   user.id,
-      orgId: user.org_id,
-      email: user.email,
-      role:  user.role as 'ADMIN' | 'TREASURER' | 'SIGNATORY',
+      sub:          user.id,
+      orgId:        user.org_id,
+      email:        user.email,
+      role:         user.role as 'ADMIN' | 'TREASURER' | 'SIGNATORY',
+      tokenVersion: user.token_version,
     });
 
     logger.info({

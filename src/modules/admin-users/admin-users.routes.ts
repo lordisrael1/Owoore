@@ -5,10 +5,28 @@ import { validateBody, validateParams } from '../../middleware/validateRequest';
 import { generalRateLimiter } from '../../middleware/ratelimiter';
 import {
   inviteSchema, acceptInviteSchema, setPasswordSchema, inviteTokenParamSchema,
+  adminUserIdParamSchema, updateAdminUserSchema,
 } from './admin-users.validator';
 import { adminUserController } from './admin-users.controller';
 
 const router = Router();
+
+// Team roster — any staff member can see who has access
+router.get(
+  '/',
+  authenticateAdmin,
+  adminUserController.list,
+);
+
+// Revoke / restore a team member's access (ADMIN only)
+router.patch(
+  '/:id',
+  authenticateAdmin,
+  requireRole(['ADMIN']),
+  validateParams(adminUserIdParamSchema),
+  validateBody(updateAdminUserSchema),
+  adminUserController.setActive,
+);
 
 // Admin sends invite email to a treasurer
 router.post(

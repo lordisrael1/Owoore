@@ -52,4 +52,11 @@ export const authController = {
     const result = await authService.refresh(token);
     res.json({ success: true, data: result });
   }),
+
+  // POST /auth/admin/logout — invalidates every session for the caller
+  adminLogout: catchAsync(async (req: Request, res: Response) => {
+    const user = (req as any).user;
+    await adminAuthService.logout(user.sub);
+    res.json({ success: true, data: { message: 'Logged out. All sessions have been invalidated.' } });
+  }),
 };

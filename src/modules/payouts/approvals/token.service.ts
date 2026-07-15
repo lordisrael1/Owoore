@@ -30,7 +30,7 @@ export const tokenService = {
     expiryHours:     number;
     email:           string;
   }): Promise<{ rawToken: string; recordId: string }> {
-    const { payoutRequestId, signatoryId, expiryHours, email } = input;
+    const { payoutRequestId, signatoryId, expiryHours } = input;
 
     const rawToken  = randomUUID();
     const tokenHash = hashToken(rawToken);

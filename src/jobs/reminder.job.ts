@@ -2,7 +2,6 @@ import { queryMany } from '../db';
 import { logger } from '../utils/logger';
 import { emailService } from '../notifications/email/email.service';
 import { formatNaira } from '../utils/formatMoney';
-import { env } from '../config/env';
 
 /**
  * reminder.job.ts — weekly email to members with unpaid expected amounts.

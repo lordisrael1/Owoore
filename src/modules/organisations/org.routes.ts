@@ -40,4 +40,14 @@ router.patch(
   orgController.update,
 );
 
+// Replace the church logo: new image in, previous Cloudinary asset deleted
+router.put(
+  '/:id/logo',
+  authenticateAdmin,
+  validateParams(orgIdParamSchema),
+  scopeToOrg,
+  uploadLogo,
+  orgController.updateLogo,
+);
+
 export default router;

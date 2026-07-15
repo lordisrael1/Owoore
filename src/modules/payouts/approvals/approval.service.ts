@@ -7,12 +7,12 @@ import { approvalRepository } from './approval.repository';
 import { payoutRepository } from '../payout.repository';
 import { ledgerService } from '../../transactions/ledger.service';
 import { nombaTransferService } from '../nomba-transfer.service';
-import { lookupBankAccount } from '../bank-lookup.service';
 import { assertTransition } from '../payout-state.machine';
 import { verifyPhoneLast4 } from '../../../utils/crypto';
 import { formatNaira } from '../../../utils/formatMoney';
 import { env } from '../../../config/env';
-import { resend, FROM_ADDRESS, EMAIL_SUBJECTS } from '../../../config/resend';
+import { EMAIL_SUBJECTS } from '../../../config/resend';
+import { emailService } from '../../../notifications/email/email.service';
 import { auditService } from '../../audit/audit.service';
 
 /**
@@ -47,17 +47,9 @@ export const approvalPayoutService = {
 
     const expiresAt = new Date(Date.now() + autoDeclineHours * 60 * 60 * 1000);
 
-    // Create payout request
-    const payout = await payoutRepository.create({
-      org_id: orgId, fund_type_id: fundTypeId,
-      bank_account_id: bankAccountId, initiated_by: initiatedBy,
-      amount_kobo: amountKobo, purpose, expires_at: expiresAt,
-    });
-
-    // Soft-lock the amount immediately
-    await ledgerService.softLock({ org_id: orgId, fund_type_id: fundTypeId, amountKobo });
-
-    // Get eligible signatories (excludes initiator)
+    // Eligibility gate FIRST — before any money is locked. Previously this
+    // ran after create+softLock, so a failed check stranded a PENDING row
+    // and a soft-lock until the expiry job cleaned them up.
     const signatories = await quorumService.getEligibleSignatories(orgId, initiatedBy);
 
     if (signatories.length < minApprovers) {
@@ -67,6 +59,24 @@ export const approvalPayoutService = {
         'Add more signatories in Settings → Signatories.',
       );
     }
+
+    // Balance check + soft-lock + payout row atomically, with row locks —
+    // concurrent initiations serialise instead of both passing the gate.
+    const payout = await withTransaction(async (client) => {
+      const { lockedPeriod } = await ledgerService.checkAndLock(client, {
+        org_id:        orgId,
+        fund_type_id:  fundTypeId,
+        amountKobo,
+        feeBufferKobo: env.NOMBA_TRANSFER_FEE_KOBO,
+      });
+
+      return payoutRepository.createTx(client, {
+        org_id: orgId, fund_type_id: fundTypeId,
+        bank_account_id: bankAccountId, initiated_by: initiatedBy,
+        amount_kobo: amountKobo, purpose, expires_at: expiresAt,
+        locked_period_month: lockedPeriod,
+      });
+    });
 
     // Fetch bank + org details for email
     const bankAccount = await queryOne<{
@@ -234,7 +244,18 @@ export const approvalPayoutService = {
 
     if (!signatory) throw Errors.notFound('Signatory');
 
-    if (signatory.phone && !verifyPhoneLast4(phoneLast4, signatory.phone)) {
+    // The phone challenge is what stops a forwarded/leaked email link from
+    // being actioned by anyone. A signatory WITHOUT a phone must not be a
+    // silent bypass — block and tell them how to fix it.
+    if (!signatory.phone) {
+      throw Errors.forbidden(
+        'Your signatory account has no registered phone number, which is required ' +
+        'to verify approval actions. Ask your church admin to add your phone in ' +
+        'Settings → Signatories, then use this link again.',
+      );
+    }
+
+    if (!verifyPhoneLast4(phoneLast4, signatory.phone)) {
       throw Errors.unauthorized(
         'Phone number verification failed. Please enter the last 4 digits of your registered phone.',
       );
@@ -263,17 +284,29 @@ export const approvalPayoutService = {
     await approvalRepository.recordAction(tokenRecord.id, action, ipAddress);
     await tokenService.markUsed(tokenRecord.id, ipAddress);
 
-    // 6. Handle decline — instant kill
+    // 6. Handle decline — instant kill.
+    // Compare-and-set: only lands if the payout is STILL awaiting approval
+    // at write time. If a concurrent approver just fired the transfer (or
+    // the expiry job got here first), we must NOT stomp that state or
+    // double-release the lock.
     if (action === 'DECLINED') {
       assertTransition(payout.status, 'DECLINED');
-      await payoutRepository.updateStatus(payout.id, 'DECLINED', {
-        declined_by: tokenRecord.signatory_id,
-      });
+      const declinedRow = await payoutRepository.transitionStatus(
+        payout.id, ['PENDING', 'PARTIAL'], 'DECLINED',
+        { declined_by: tokenRecord.signatory_id },
+      );
+
+      if (!declinedRow) {
+        throw Errors.conflict(
+          'This payout was processed by someone else moments ago and can no longer be declined.',
+        );
+      }
 
       await ledgerService.releaseLock({
         org_id:       payout.org_id,
         fund_type_id: payout.fund_type_id,
         amountKobo:   payout.amount_kobo,
+        lockedPeriod: payout.locked_period_month,
       });
 
       logger.warn({
@@ -310,10 +343,11 @@ export const approvalPayoutService = {
     const quorum = await quorumService.check(payout.id, minApprovers);
 
     if (!quorum.quorumReached) {
-      // Move to PARTIAL — still waiting for more approvals
-      const newStatus = payout.status === 'PENDING' ? 'PARTIAL' : 'PARTIAL';
-      assertTransition(payout.status, newStatus);
-      await payoutRepository.updateStatus(payout.id, newStatus, {
+      // Move to PARTIAL — still waiting for more approvals. CAS so a
+      // concurrent quorum-completer / decliner / expiry can't be stomped
+      // back to PARTIAL by this slower writer.
+      assertTransition(payout.status, 'PARTIAL');
+      await payoutRepository.transitionStatus(payout.id, ['PENDING', 'PARTIAL'], 'PARTIAL', {
         approvals_received: quorum.approvalsIn,
       });
 
@@ -346,11 +380,29 @@ export const approvalPayoutService = {
       };
     }
 
-    // 8. Quorum reached — fire the transfer
-    logger.info({ payout_id: payout.id }, '[ApprovalService] Quorum reached — firing transfer');
-
+    // 8. Quorum reached — fire the transfer.
+    //
+    // SINGLE-FIRE GUARD: two signatories completing quorum in the same
+    // instant both reach this line. The compare-and-set below is the
+    // decider — exactly one caller's UPDATE matches PENDING/PARTIAL and
+    // returns a row; the loser gets null and must NOT proceed to the
+    // transfer. (Nomba's merchantTxRef dedup was the only thing preventing
+    // a double-send before; now the app enforces it too.)
     assertTransition(payout.status, 'APPROVED');
-    await payoutRepository.updateStatus(payout.id, 'APPROVED');
+    const approvedRow = await payoutRepository.transitionStatus(
+      payout.id, ['PENDING', 'PARTIAL'], 'APPROVED',
+    );
+
+    if (!approvedRow) {
+      logger.info({ payout_id: payout.id, signatory_id: tokenRecord.signatory_id },
+        '[ApprovalService] Quorum race — another approver already advanced this payout');
+      return {
+        status:  'APPROVED',
+        message: 'Approval recorded. The transfer was already initiated by a concurrent approval.',
+      };
+    }
+
+    logger.info({ payout_id: payout.id }, '[ApprovalService] Quorum reached — firing transfer');
 
     await auditService.record({
       org_id:      payout.org_id,
@@ -379,7 +431,7 @@ export const approvalPayoutService = {
     if (!bankAccount) throw Errors.notFound('Bank account');
 
     assertTransition('APPROVED', 'TRANSFERRING');
-    await payoutRepository.updateStatus(payout.id, 'TRANSFERRING');
+    await payoutRepository.transitionStatus(payout.id, ['APPROVED'], 'TRANSFERRING');
 
     // Fire Nomba transfer
     let transfer;
@@ -393,18 +445,25 @@ export const approvalPayoutService = {
         narration:       `Owoore payout: ${payout.purpose.slice(0, 50)}`,
       });
     } catch (err: any) {
-      await payoutRepository.updateStatus(payout.id, 'FAILED', {
+      await payoutRepository.transitionStatus(payout.id, ['TRANSFERRING'], 'FAILED', {
         transfer_error: err.message ?? 'Transfer request failed',
       });
       await ledgerService.releaseLock({
         org_id:       payout.org_id,
         fund_type_id: payout.fund_type_id,
         amountKobo:   payout.amount_kobo,
+        lockedPeriod: payout.locked_period_month,
       });
 
       logger.error({
         payout_id: payout.id, err: err.message,
       }, '[ApprovalService] Transfer call failed — payout marked FAILED, funds unlocked');
+
+      const { alertPayoutFailure } = await import('../../../notifications/ops-alert.service');
+      await alertPayoutFailure({
+        payoutId: payout.id, orgId: payout.org_id, amountKobo: payout.amount_kobo,
+        reason: err.message ?? 'Transfer request failed', path: 'MULTI_APPROVER',
+      });
 
       throw Errors.nombaError(
         `Transfer could not be completed: ${err.message}. Funds have been unlocked — the initiator can retry.`,
@@ -529,12 +588,14 @@ export const approvalPayoutService = {
 </body></html>`;
 
     try {
-      await resend.emails.send({
-        from:    FROM_ADDRESS,
+      // emailService (not raw resend): Resend reports most failures via
+      // result.error WITHOUT rejecting, so a direct call here made this
+      // catch dead code — a lost approval email looked like a success.
+      await emailService.send({
         to,
         subject: EMAIL_SUBJECTS.APPROVAL_REQUEST(amount, ''),
         html,
-      });
+      }, true);
       logger.info({ to: to.slice(0, 3) + '***' }, '[ApprovalService] Approval email sent');
     } catch (err: any) {
       logger.error({ to: to.slice(0, 3) + '***', err: err.message },

@@ -111,15 +111,39 @@ export const csvService = {
   },
 
   /**
-   * generateFundSummary — aggregate by fund for admin financial report.
+   * generateFundSummary — the board-meeting export: one row per fund per
+   * month with collected, paid out, net, unique givers and transaction count.
+   *
+   * This is what a pastor takes to a leadership meeting — "here is what each
+   * fund brought in and what went out" — rather than a raw transaction dump.
+   *
+   * Scope:
+   *   - period 'YYYY-MM' → that single month only
+   *   - year (default: current) → every month in that year
+   * A TOTAL row is appended so the bottom line is readable without a spreadsheet.
    */
-  async generateFundSummary(orgId: string, year?: number): Promise<string> {
-    const targetYear = year ?? new Date().getFullYear();
+  async generateFundSummary(orgId: string, options: {
+    period?: string;   // YYYY-MM — one month
+    year?:   number;   // whole year (ignored when period is set)
+  } = {}): Promise<string> {
+    const params: unknown[] = [orgId];
+    let periodClause: string;
+
+    if (options.period) {
+      params.push(options.period);
+      periodClause = `fl.period_month = $${params.length}`;
+    } else {
+      const targetYear = options.year ?? new Date().getFullYear();
+      params.push(`${targetYear}-%`);
+      periodClause = `fl.period_month LIKE $${params.length}`;
+    }
 
     const rows = await queryMany<{
       fund_name:       string;
       period_month:    string;
       total_collected: number;
+      total_paid_out:  number;
+      total_fees:      number;
       member_count:    number;
       tx_count:        number;
     }>(
@@ -127,27 +151,61 @@ export const csvService = {
          ft.name AS fund_name,
          fl.period_month,
          fl.total_collected_kobo AS total_collected,
+         fl.total_paid_out_kobo  AS total_paid_out,
+         fl.total_fees_kobo      AS total_fees,
          fl.member_count_paid    AS member_count,
          fl.total_transactions   AS tx_count
        FROM fund_ledger fl
        JOIN fund_types ft ON ft.id = fl.fund_type_id
        WHERE ft.org_id = $1
-         AND fl.period_month LIKE $2
-       ORDER BY ft.sort_order ASC, fl.period_month ASC`,
-      [orgId, `${targetYear}-%`],
+         AND ${periodClause}
+       ORDER BY fl.period_month ASC, ft.sort_order ASC`,
+      params,
     );
 
-    const header = ['Fund', 'Period', 'Total Collected (₦)', 'Members Paid', 'Transactions'].join(',');
+    const header = [
+      'Fund', 'Period', 'Collected (₦)', 'Paid Out (₦)', 'Net (₦)',
+      'Givers', 'Transactions',
+    ].join(',');
 
-    const dataRows = rows.map((r) => [
-      csvEscape(r.fund_name),
-      csvEscape(formatPeriod(r.period_month)),
-      fromKobo(Number(r.total_collected)).toFixed(2),
-      r.member_count,
-      r.tx_count,
-    ].join(','));
+    const dataRows = rows.map((r) => {
+      const collected = Number(r.total_collected);
+      const paidOut   = Number(r.total_paid_out);
+      const fees      = Number(r.total_fees);
+      return [
+        csvEscape(r.fund_name),
+        csvEscape(formatPeriod(r.period_month)),
+        fromKobo(collected).toFixed(2),
+        fromKobo(paidOut).toFixed(2),
+        fromKobo(collected - fees - paidOut).toFixed(2),
+        r.member_count,
+        r.tx_count,
+      ].join(',');
+    });
 
-    return [header, ...dataRows].join('\n');
+    // Bottom-line TOTAL row — the number a pastor reads first
+    const totals = rows.reduce(
+      (acc, r) => {
+        acc.collected += Number(r.total_collected);
+        acc.paidOut   += Number(r.total_paid_out);
+        acc.fees      += Number(r.total_fees);
+        acc.tx        += Number(r.tx_count);
+        return acc;
+      },
+      { collected: 0, paidOut: 0, fees: 0, tx: 0 },
+    );
+
+    const totalRow = [
+      'TOTAL',
+      options.period ? csvEscape(formatPeriod(options.period)) : String(options.year ?? new Date().getFullYear()),
+      fromKobo(totals.collected).toFixed(2),
+      fromKobo(totals.paidOut).toFixed(2),
+      fromKobo(totals.collected - totals.fees - totals.paidOut).toFixed(2),
+      '',
+      totals.tx,
+    ].join(',');
+
+    return [header, ...dataRows, ...(rows.length ? [totalRow] : [])].join('\n');
   },
 };
 

@@ -1,5 +1,8 @@
 import rateLimit from 'express-rate-limit';
+import { RedisStore } from 'rate-limit-redis';
 import { AppError } from '../utils/AppError';
+import { env } from '../config/env';
+import { getRedisClient } from '../config/redis';
 
 /**
  * rateLimiter.ts — per-endpoint rate limiting.
@@ -9,11 +12,28 @@ import { AppError } from '../utils/AppError';
  *   Approval endpoints: 5 requests / 1 minute   (prevent token scanning)
  *   General API:        100 requests / 1 minute  (general abuse protection)
  *
- * Uses in-memory store by default.
- * For multi-instance Railway deployments, swap to redis store:
- *   npm install rate-limit-redis
- *   import { RedisStore } from 'rate-limit-redis';
+ * PRODUCTION uses a Redis-backed store: the in-memory default resets on
+ * every deploy and isn't shared across instances, so limits weren't
+ * actually enforced where they matter (OTP brute-force, credential
+ * stuffing, approval-token scanning). Requires app.set('trust proxy', 1)
+ * in app.ts so req.ip is the real client behind Render's proxy — without
+ * it every user shares the proxy's IP bucket.
+ *
+ * Dev/test keep the in-memory store: deterministic, no Redis dependency.
+ * passOnStoreError: a Redis outage degrades to "no rate limit", never to
+ * a 500 on every request.
  */
+
+const useRedis = env.NODE_ENV === 'production';
+
+function makeStore(prefix: string): RedisStore | undefined {
+  if (!useRedis) return undefined; // express-rate-limit falls back to memory
+  return new RedisStore({
+    prefix: `rl:${prefix}:`,
+    sendCommand: async (...args: string[]) =>
+      (await getRedisClient()).sendCommand(args),
+  });
+}
 
 const rateLimitErrorHandler = (msg: string) => (_req: any, _res: any, next: any) =>
   next(new AppError(msg, 429, true, 'TOO_MANY_REQUESTS'));
@@ -27,6 +47,8 @@ export const otpRateLimiter = rateLimit({
   standardHeaders:  true,
   legacyHeaders:    false,
   skipSuccessfulRequests: false,
+  store:            makeStore('otp'),
+  passOnStoreError: true,
   handler: rateLimitErrorHandler(
     'Too many OTP requests from this IP. Please wait 15 minutes before trying again.',
   ),
@@ -40,6 +62,8 @@ export const approvalRateLimiter = rateLimit({
   max:              5,
   standardHeaders:  true,
   legacyHeaders:    false,
+  store:            makeStore('approval'),
+  passOnStoreError: true,
   handler: rateLimitErrorHandler(
     'Too many approval requests. Please wait a moment.',
   ),
@@ -52,6 +76,8 @@ export const generalRateLimiter = rateLimit({
   max:              100,
   standardHeaders:  true,
   legacyHeaders:    false,
+  store:            makeStore('general'),
+  passOnStoreError: true,
   handler: rateLimitErrorHandler(
     'Too many requests. Please slow down.',
   ),
@@ -64,6 +90,8 @@ export const adminLoginRateLimiter = rateLimit({
   max:              10,
   standardHeaders:  true,
   legacyHeaders:    false,
+  store:            makeStore('login'),
+  passOnStoreError: true,
   handler: rateLimitErrorHandler(
     'Too many login attempts. Please wait 15 minutes.',
   ),

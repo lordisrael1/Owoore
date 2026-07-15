@@ -1,4 +1,4 @@
-import { query, queryOne, queryMany } from '../../db';
+import { query, queryOne } from '../../db';
 
 export interface Organisation {
   id:         string;

@@ -63,7 +63,7 @@ export async function getOrSetWithLock<T>(options: CacheAsideOptions<T>): Promis
     return fetch();
   }
 
-  let gotLock = false;
+  let gotLock: boolean;
   try {
     gotLock = (await redis.set(lockKey, '1', { NX: true, EX: lockTtlSeconds })) !== null;
   } catch (err: any) {

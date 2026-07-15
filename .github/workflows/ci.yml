@@ -1,0 +1,102 @@
+# CI - every PR and push to main: install, typecheck, lint, migrate, test.
+# Checks run against throwaway Postgres/Redis service containers. No secrets
+# are needed: the app's env schema is satisfied with CI dummy values,
+# NODE_ENV=test suppresses outbound email, and no test calls
+# a live Nomba endpoint.
+#
+# Deploy (on main): this repo deploys via the platform's own
+# "npm run deploy" (db:migrate && npm start), so migrations always run
+# before the new code serves traffic. To trigger a deploy from CI,
+# add a RENDER_DEPLOY_HOOK_URL (or equivalent) repo secret — the deploy
+# job below fires it only after every check has passed on main.
+# The API and the queue worker (src/worker.ts) should be separate
+# services on the platform: `npm run deploy` and `npm run worker`.
+
+name: CI
+
+'on':
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: owoore
+          POSTGRES_PASSWORD: owoore
+          POSTGRES_DB: owoore_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U owoore"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://owoore:owoore@localhost:5432/owoore_test
+      REDIS_URL: redis://localhost:6379
+      JWT_SECRET: ci-only-jwt-secret-not-used-anywhere-real
+      NOMBA_ACCOUNT_ID: ci-dummy
+      NOMBA_SUB_ACCOUNT_ID: ci-dummy
+      NOMBA_CLIENT_ID: ci-dummy
+      NOMBA_CLIENT_SECRET: ci-dummy
+      NOMBA_WEBHOOK_SECRET: ci-dummy-webhook-secret
+      RESEND_API_KEY: re_ci_dummy
+      CLOUDINARY_CLOUD_NAME: ci-dummy
+      CLOUDINARY_API_KEY: ci-dummy
+      CLOUDINARY_API_SECRET: ci-dummy
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Run database migrations
+        run: npm run db:migrate
+
+      - name: Tests (unit + integration + e2e)
+        run: npm test
+
+  deploy:
+    # Fires the platform deploy hook only when every check passed on main.
+    # No-ops (skipped) until the RENDER_DEPLOY_HOOK_URL secret is set.
+    needs: checks
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger platform deploy
+        env:
+          DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$DEPLOY_HOOK" ]; then
+            echo "RENDER_DEPLOY_HOOK_URL secret not set — skipping deploy trigger."
+            exit 0
+          fi
+          curl -fsS -X POST "$DEPLOY_HOOK"
+          echo "Deploy triggered."

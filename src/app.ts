@@ -1,3 +1,4 @@
+import path from 'path';
 import express, { Express } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -38,6 +39,63 @@ import bankRouter        from './modules/payouts/bank.routes';
  */
 export function createApp(): Express {
   const app = express();
+
+  // ── Proxy awareness ──────────────────────────────────────────────────
+  // Render terminates TLS at one proxy hop. Without this, req.ip is the
+  // proxy's address — every user shares one rate-limit bucket and abuse
+  // limits are meaningless. 1 = trust exactly one X-Forwarded-For hop
+  // (never `true`: that would let clients spoof their IP).
+  app.set('trust proxy', 1);
+
+  // ── API documentation (before helmet: the Scalar viewer is a CDN
+  // script, which helmet's default CSP would block; the page is public
+  // documentation with no auth or user data) ───────────────────────────
+  const openapiPath = path.resolve(process.cwd(), 'docs', 'openapi.yaml');
+  app.get('/docs/openapi.yaml', (_req, res) => {
+    res.type('text/yaml').sendFile(openapiPath);
+  });
+
+  const heroSvgPath = path.resolve(process.cwd(), 'docs', 'assets', 'owoore-hero.svg');
+  app.get('/docs/owoore-hero.svg', (_req, res) => {
+    res.type('image/svg+xml').sendFile(heroSvgPath);
+  });
+
+  app.get('/docs', (_req, res) => {
+    // Scalar theme: "purple" base, accents overridden to Owoore's brand
+    // green (#14532d — same palette as the transactional emails).
+    const scalarConfig = JSON.stringify({
+      theme: 'purple',
+      customCss: `
+        .light-mode {
+          --scalar-color-accent: #15803d;
+          --scalar-button-1: #14532d;
+          --scalar-button-1-hover: #166534;
+          --scalar-sidebar-color-active: #15803d;
+        }
+        .dark-mode {
+          --scalar-color-accent: #4ade80;
+          --scalar-sidebar-color-active: #4ade80;
+        }
+      `,
+    });
+
+    res.type('html').send(`<!doctype html>
+<html>
+  <head>
+    <title>Owoore API Reference</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+  </head>
+  <body>
+    <script id="api-reference" data-url="/docs/openapi.yaml"></script>
+    <script>
+      document.getElementById('api-reference').dataset.configuration =
+        ${JSON.stringify(scalarConfig)};
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+  </body>
+</html>`);
+  });
 
   // ── Security headers ─────────────────────────────────────────────────
   app.use(helmet());

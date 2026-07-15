@@ -247,6 +247,92 @@ export const dashboardRepository = {
   },
 
   /**
+   * getTransactions — the org-wide giving ledger.
+   *
+   * UNION of member transactions (attributed) and anonymous_transactions
+   * (shared/anonymous VAs). Sender details on anonymous rows are
+   * deliberately withheld — anonymous means anonymous, even to admins.
+   *
+   * Filters are applied inside each UNION branch so the per-branch
+   * indexes (idx_transactions_period, idx_anon_tx_period) stay usable.
+   */
+  async getTransactions(orgId: string, opts: {
+    fundTypeId?: string;
+    period?:     string;
+    limit:       number;
+    offset:      number;
+  }): Promise<{
+    rows: Array<{
+      id:             string;
+      source:         'MEMBER' | 'ANONYMOUS';
+      member_id:      string | null;
+      member_name:    string | null;
+      member_code:    string | null;
+      fund_type_id:   string;
+      fund_name:      string;
+      amount_kobo:    number;
+      payment_status: string;
+      variance_kobo:  number;
+      sender_bank:    string | null;
+      narration:      string | null;
+      period_month:   string;
+      created_at:     Date;
+    }>;
+    total: number;
+  }> {
+    const params = [orgId, opts.fundTypeId ?? null, opts.period ?? null];
+
+    const unified = `
+      SELECT t.id,
+             'MEMBER'::TEXT          AS source,
+             t.member_id,
+             m.display_name          AS member_name,
+             m.member_code,
+             t.fund_type_id,
+             ft.name                 AS fund_name,
+             t.amount_kobo,
+             t.payment_status::TEXT  AS payment_status,
+             t.variance_kobo,
+             t.sender_bank,
+             t.narration,
+             t.period_month,
+             t.created_at
+      FROM transactions t
+      JOIN members m     ON m.id  = t.member_id
+      JOIN fund_types ft ON ft.id = t.fund_type_id
+      WHERE t.org_id = $1
+        AND ($2::uuid    IS NULL OR t.fund_type_id = $2)
+        AND ($3::char(7) IS NULL OR t.period_month = $3)
+      UNION ALL
+      SELECT a.id,
+             'ANONYMOUS'::TEXT, NULL, NULL, NULL,
+             a.fund_type_id, ft.name, a.amount_kobo,
+             'EXACT'::TEXT, 0::BIGINT,
+             NULL, NULL,
+             a.period_month, a.created_at
+      FROM anonymous_transactions a
+      JOIN fund_types ft ON ft.id = a.fund_type_id
+      WHERE a.org_id = $1
+        AND ($2::uuid    IS NULL OR a.fund_type_id = $2)
+        AND ($3::char(7) IS NULL OR a.period_month = $3)`;
+
+    const [rows, count] = await Promise.all([
+      queryMany<any>(
+        `SELECT * FROM (${unified}) u
+         ORDER BY created_at DESC
+         LIMIT $4 OFFSET $5`,
+        [...params, opts.limit, opts.offset],
+      ),
+      queryOne<{ total: string }>(
+        `SELECT COUNT(*)::TEXT AS total FROM (${unified}) u`,
+        params,
+      ),
+    ]);
+
+    return { rows, total: Number(count?.total ?? 0) };
+  },
+
+  /**
    * getActivity — recent audit_log rows for the activity feed.
    * metadata is self-contained (names, amounts) so no joins needed —
    * events stay renderable even if the referenced entity is deleted.

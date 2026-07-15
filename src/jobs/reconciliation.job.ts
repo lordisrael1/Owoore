@@ -3,6 +3,7 @@ import { nombaClient } from '../config/nomba';
 import { env } from '../config/env';
 import { query, queryMany } from '../db';
 import { currentPeriod } from '../utils/formatMoney';
+import { sendOpsAlert } from '../notifications/ops-alert.service';
 
 /**
  * reconciliation.job.ts — CRITICAL — Nomba build-week checklist item.
@@ -90,7 +91,13 @@ export async function runReconciliationJob(): Promise<void> {
           nomba_type:     nTx.type,
         }, '[ReconciliationJob] ORPHAN: Nomba transaction not in local DB — investigate');
 
-        // Write an alert to a reconciliation_alerts table or send email
+        // nomba_raw: the FULL Nomba record, not just the fields this job
+        // happens to destructure — reconcile-replay.ts needs whatever
+        // account/VA reference field is actually present to reconstruct
+        // an event and safely replay it through the normal webhook
+        // processor. Captured defensively since the exact shape of
+        // Nomba's poll-list response (vs. its webhook push payload) isn't
+        // fully pinned down here.
         await query(
           `INSERT INTO audit_log
              (actor_type, action, entity_type, metadata, created_at)
@@ -99,6 +106,7 @@ export async function runReconciliationJob(): Promise<void> {
             nomba_tx_ref:  nTx.merchantTxRef,
             nomba_amount:  nTx.amount,
             period,
+            nomba_raw:     nTx,
           })],
         );
         continue;
@@ -141,15 +149,36 @@ export async function runReconciliationJob(): Promise<void> {
       drifts:   driftCount,
     }, '[ReconciliationJob] Reconciliation complete');
 
+    // Completion marker written on EVERY run, clean or not — this is what
+    // GET /health reads to answer "did reconciliation actually run last
+    // night", independent of whether it found anything wrong. Without
+    // this, a job that silently stops firing (cron misconfigured, the
+    // process never restarts after a deploy) looks identical to a job
+    // that ran and found nothing — the one blind spot detection alone
+    // can't cover.
+    await query(
+      `INSERT INTO audit_log
+         (actor_type, action, entity_type, metadata, created_at)
+       VALUES ('SYSTEM', 'RECONCILIATION_COMPLETED', 'reconciliation_run', $1, NOW())`,
+      [JSON.stringify({ period, total: nombaTransactions.length, matched: matchCount, orphans: orphanCount, drifts: driftCount })],
+    );
+
     if (orphanCount > 0 || driftCount > 0) {
-      logger.error({
-        orphans: orphanCount,
-        drifts:  driftCount,
-      }, '[ReconciliationJob] ACTION REQUIRED: Discrepancies found — check audit_log table');
+      await sendOpsAlert({
+        event:   'RECONCILIATION_DISCREPANCY',
+        summary: `Nightly reconciliation found ${orphanCount} orphan(s) and ${driftCount} drift(s) for ${period}`,
+        context: { period, orphans: orphanCount, drifts: driftCount, matched: matchCount },
+      });
     }
 
   } catch (err: any) {
     logger.error({ err: err.message, stack: err.stack },
       '[ReconciliationJob] Job failed with unhandled error');
+
+    await sendOpsAlert({
+      event:   'RECONCILIATION_JOB_FAILED',
+      summary: 'Nightly reconciliation job crashed before completing — no drift/orphan check ran',
+      context: { error: err.message },
+    });
   }
 }

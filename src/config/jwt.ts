@@ -15,6 +15,7 @@ export interface AdminTokenPayload extends JwtPayload {
   orgId: string;      // org UUID
   email: string;
   role: 'ADMIN' | 'TREASURER' | 'SIGNATORY';
+  tokenVersion: number; // must match admin_users.token_version — bumping it kills every existing token
 }
 
 export type TokenPayload = MemberTokenPayload | AdminTokenPayload;
@@ -68,4 +69,27 @@ export function isMemberToken(payload: TokenPayload): payload is MemberTokenPayl
 
 export function isAdminToken(payload: TokenPayload): payload is AdminTokenPayload {
   return ['ADMIN', 'TREASURER', 'SIGNATORY'].includes(payload.role);
+}
+
+/** Redis key holding the cached current token_version for one admin. */
+export const adminTokenVersionCacheKey = (adminId: string): string =>
+  `admin_token_version:${adminId}`;
+
+/**
+ * evictAdminTokenVersionCache — call right after bumping token_version in
+ * the DB so the change takes effect on the very next request instead of
+ * waiting out the ~30s cache TTL in authenticateAdmin. Best-effort: a
+ * Redis hiccup here just means revocation takes up to 30s instead of
+ * being instant — never a reason to fail the logout/revoke action itself.
+ */
+export async function evictAdminTokenVersionCache(adminId: string): Promise<void> {
+  try {
+    const { getRedisClient } = await import('./redis');
+    const redis = await getRedisClient();
+    await redis.del(adminTokenVersionCacheKey(adminId));
+  } catch (err: any) {
+    const { logger } = await import('../utils/logger');
+    logger.warn({ adminId, err: err.message },
+      '[JWT] Failed to evict cached token_version — will self-correct within ~30s');
+  }
 }

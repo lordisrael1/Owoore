@@ -24,3 +24,26 @@ export async function uploadToCloudinary(
 export async function deleteFromCloudinary(publicId: string): Promise<void> {
   await cloudinary.uploader.destroy(publicId);
 }
+
+/**
+ * publicIdFromCloudinaryUrl — recovers the public_id from a stored
+ * secure_url, e.g.
+ *   https://res.cloudinary.com/<cloud>/image/upload/v1712345/droptithe/logos/abc.png
+ *   → droptithe/logos/abc
+ *
+ * We only persist logo_url (not public_id), so this is how the old
+ * asset is located when a logo is replaced. Returns null for anything
+ * that isn't a Cloudinary delivery URL — callers must treat that as
+ * "nothing to delete", never as an error.
+ */
+export function publicIdFromCloudinaryUrl(url: string): string | null {
+  try {
+    const { hostname, pathname } = new URL(url);
+    if (hostname !== 'res.cloudinary.com') return null;
+
+    const match = pathname.match(/\/upload\/(?:v\d+\/)?(.+?)(?:\.[a-zA-Z0-9]+)?$/);
+    return match?.[1] ?? null;
+  } catch {
+    return null; // not a URL at all
+  }
+}

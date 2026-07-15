@@ -97,6 +97,12 @@ export const orgService = {
     return org;
   },
 
+  async getById(orgId: string) {
+    const org = await orgRepository.findById(orgId);
+    if (!org) throw Errors.notFound('Organisation');
+    return org;
+  },
+
   async update(orgId: string, fields: { name?: string; logo_url?: string }) {
     const updated = await orgRepository.update(orgId, fields);
     if (!updated) throw Errors.notFound('Organisation');

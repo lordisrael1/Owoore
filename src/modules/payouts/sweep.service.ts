@@ -163,6 +163,12 @@ export const sweepService = {
       logger.error({
         payout_id: payout.id, org_name, fund_name, err: err.message,
       }, '[Sweep] Transfer call failed — payout marked FAILED, funds unlocked');
+
+      const { alertPayoutFailure } = await import('../../notifications/ops-alert.service');
+      await alertPayoutFailure({
+        payoutId: payout.id, orgId: org_id, amountKobo,
+        reason: err.message ?? 'Transfer request failed', path: 'SWEEP',
+      });
       return;
     }
 

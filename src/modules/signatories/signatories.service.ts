@@ -1,4 +1,4 @@
-import { queryOne, query } from '../../db';
+import { queryOne } from '../../db';
 import { signatoryRepository } from './signatories.repository';
 import { Errors } from '../../utils/AppError';
 import { logger } from '../../utils/logger';
@@ -42,6 +42,16 @@ export const signatoryService = {
     // here — name/role land verbatim in approval-request emails later.
     input.name = sanitizeText(input.name);
     input.role = sanitizeText(input.role);
+
+    // An approver's phone is the second factor on approval links (last-4
+    // challenge). Without one, possession of the emailed link would be the
+    // only credential — so approvers MUST have a phone on file.
+    if ((input.can_approve ?? true) && !input.phone?.trim()) {
+      throw Errors.badRequest(
+        'A phone number is required for signatories who can approve payouts — ' +
+        'it is used to verify their identity on approval links.',
+      );
+    }
 
     // Prevent duplicate email within same org
     const existing = await signatoryRepository.findByEmail(input.email, orgId);
@@ -87,6 +97,17 @@ export const signatoryService = {
 
     if (fields.name !== undefined) fields.name = sanitizeText(fields.name);
     if (fields.role !== undefined) fields.role = sanitizeText(fields.role);
+
+    // Same approver-needs-phone rule as create — considering the row's
+    // current values for anything this update doesn't touch.
+    const willApprove = fields.can_approve ?? signatory.can_approve;
+    const phoneAfter  = fields.phone !== undefined ? fields.phone : signatory.phone;
+    if (willApprove && !phoneAfter?.trim()) {
+      throw Errors.badRequest(
+        'A phone number is required for signatories who can approve payouts — ' +
+        'add one before enabling approval rights.',
+      );
+    }
 
     const updated = await signatoryRepository.update(id, orgId, fields);
     logger.info({ signatory_id: id }, '[SignatoryService] Signatory updated');

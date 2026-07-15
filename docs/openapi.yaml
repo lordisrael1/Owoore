@@ -1,0 +1,901 @@
+openapi: 3.1.0
+
+info:
+  title: Owoore API
+  version: 1.0.0
+  description: |
+    Multi-tenant digital giving platform for churches — dedicated virtual bank
+    accounts per member per fund, automatic reconciliation, and M-of-N
+    signatory payout governance. Built on Nomba.
+
+    ![Two of Owoore's core calls — registering a church and verifying a member OTP](/docs/owoore-hero.svg)
+
+    ## Get started
+    There's no shared public API key here — Owoore is multi-tenant, so every
+    church gets its own admin account and its own token from a live call, not
+    a static sandbox credential pasted into docs.
+
+    1. **Register a church** — `POST /api/v1/orgs` with a name, admin name,
+       email, and password. This one call also creates the default payout
+       policy and the default Tithe/Offering funds.
+    2. **Verify the admin email** — an OTP is sent on registration; confirm
+       it with `POST /api/v1/auth/admin/verify-email` to activate the account
+       and receive your first admin JWT.
+    3. **Authenticate every admin request after that** with
+       `Authorization: Bearer <token>` from step 2, or from
+       `POST /api/v1/auth/admin/login` on subsequent visits.
+    4. **Members join separately** — `POST /api/v1/auth/send-otp` then
+       `POST /api/v1/auth/verify-otp` against the church's join slug, no
+       admin token involved.
+
+    > **Note:** every endpoint below is grouped by resource in the sidebar —
+    > each group's summary lists exactly which calls belong to it before you
+    > open one, the same way Nomba's own reference is laid out.
+
+    ## Money conventions (read this first)
+    - **Every money field is an integer in KOBO** (`amount_kobo`, `*_kobo`).
+      ₦1 = 100 kobo. Floats are never used. The single exception is payout
+      *initiation*, whose request body takes `amount` in **naira** (converted
+      server-side with `toKobo`).
+    - **Available balance** = `total_collected − total_fees − total_paid_out −
+      soft_lock`, floored at 0. Initiating a payout must also leave headroom
+      for the Nomba transfer fee (`NOMBA_TRANSFER_FEE_KOBO`, default ₦20).
+    - **Webhook delivery is asynchronous and idempotent.** `POST
+      /webhooks/nomba` ACKs with 200 only after the event is durably queued
+      (pg-boss row in Postgres). Processing happens in a worker; duplicate
+      deliveries of the same `requestId` are suppressed by a UNIQUE
+      constraint — replays can never double-credit a ledger.
+    - **Payout status state machine** (strict, enforced by compare-and-set):
+      `PENDING → PARTIAL → APPROVED → TRANSFERRING → TRANSFERRED`.
+      Terminal failures: `DECLINED` (any one signatory), `EXPIRED` (no quorum
+      in time), `CANCELLED` (initiator, before any approval), `FAILED`
+      (Nomba transfer error — soft lock released, retry possible).
+      Below the org's `threshold_kobo` (default ₦100,000) payouts skip
+      approval and transfer directly; at/above it, `min_approvers` (default
+      2) signatories must approve via tokenised email links. The initiator
+      can never approve their own request.
+
+    ## Authentication
+    Three credential types (see `securitySchemes`):
+    - **memberToken** — JWT from `POST /auth/verify-otp` (OTP login).
+    - **adminToken** — JWT from `POST /auth/admin/login` (email+password;
+      roles `ADMIN`, `TREASURER`, `SIGNATORY`). Role requirements are listed
+      per endpoint. Dashboards/reports require `ADMIN` or `TREASURER`.
+    - **approval tokens / invite tokens** — single-use tokens carried in the
+      URL; no JWT involved. Approval actions additionally require the last 4
+      digits of the signatory's registered phone.
+
+    ## Rate limits (per IP)
+    - OTP endpoints: 3 / 15 min · Admin login: 10 / 15 min
+    - Approval links: 5 / min (anti token-scanning)
+    - General API: 100 / min
+    Exceeding a limit returns `429 TOO_MANY_REQUESTS`.
+
+    ## Error envelope
+    Every error is `{ "success": false, "error": { "code", "message" } }`
+    with codes such as `VALIDATION_ERROR` (422), `UNAUTHORIZED` (401),
+    `FORBIDDEN` (403), `NOT_FOUND` (404), `CONFLICT` (409), `UNPROCESSABLE`
+    (422), `TOO_MANY_REQUESTS` (429), `NOMBA_ERROR` (502).
+
+servers:
+  - url: https://owoore.onrender.com
+    description: Production
+  - url: http://localhost:4000
+    description: Local development
+
+tags:
+  - name: Health
+    description: Liveness and deep health checks — database, Nomba config, Redis, and the money-processing pipeline (queue depth, dead letters, failed payouts, reconciliation freshness).
+  - name: Auth
+    description: OTP login for members, email+password login for admins/treasurers, email verification, password reset, refresh-token rotation, and admin logout (invalidates every session everywhere).
+  - name: Organisations
+    description: Church registration and management. Registering a church transactionally creates its admin, default payout policy, and default funds (Tithe, Offering).
+  - name: Team
+    description: Manage admin/treasurer accounts for a church — invite teammates by email, view the roster, and revoke or restore dashboard access.
+  - name: Members
+    description: The member portal — profile, active funds, and giving history — plus the admin-facing paginated member list.
+  - name: Funds
+    description: Fund types a church collects into (Tithe, Offering, Building Fund, campaigns). Each fund is either per-member (dedicated virtual account per giver) or shared (one virtual account for the whole church).
+  - name: Virtual Accounts
+    description: Dedicated Nomba virtual account numbers, created lazily the first time a member gives to a fund. One permanent NUBAN per member per fund.
+  - name: Public Giving
+    description: The public giving page — no authentication required. Shows shared virtual account numbers for anonymous and offering-style giving.
+  - name: Webhooks
+    description: The Nomba event sink. HMAC-verified, durably queued before acknowledgement, and idempotent — replayed or duplicate deliveries can never double-credit a ledger.
+  - name: Payouts
+    description: Treasury payout requests. Below the org's threshold, transfers fire directly; at or above it, they route through M-of-N signatory approval before any money moves.
+  - name: Approvals
+    description: The tokenised, no-login approval flow signatories use from an emailed link — approve or decline a payout, confirming identity with the last 4 digits of their registered phone.
+  - name: Signatories
+    description: The people who approve payout requests above the threshold, and the payout policy that governs how many of them must agree.
+  - name: Dashboard
+    description: Admin/treasurer dashboard data — collection summaries, fund breakdowns, member payment status, payout history, the giving ledger, and recent activity.
+  - name: Reports
+    description: Downloadable giving reports (JSON or CSV) — org-wide by fund and period, per-member statements, and outstanding pledge arrears.
+  - name: Banks
+    description: Nigerian bank list and account-name lookup, used to verify a payout's destination account before money is sent to it.
+
+components:
+  securitySchemes:
+    adminToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Admin JWT (roles ADMIN / TREASURER / SIGNATORY)
+    memberToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Member JWT from OTP verification
+
+  schemas:
+    Success:
+      type: object
+      properties:
+        success: { type: boolean, const: true }
+        data: { }
+    Error:
+      type: object
+      properties:
+        success: { type: boolean, const: false }
+        error:
+          type: object
+          properties:
+            code: { type: string, example: VALIDATION_ERROR }
+            message: { type: string }
+    Kobo:
+      type: integer
+      description: Money in kobo (₦1 = 100 kobo). Always an integer.
+      example: 2500000
+    PayoutStatus:
+      type: string
+      enum: [PENDING, PARTIAL, APPROVED, TRANSFERRING, TRANSFERRED, DECLINED, EXPIRED, FAILED, CANCELLED]
+    PaymentStatus:
+      type: string
+      description: Reconciliation outcome vs the fund's expected amount (pledge). No pledge → EXACT.
+      enum: [EXACT, UNDERPAYMENT, OVERPAYMENT]
+
+  responses:
+    Unauthorized:
+      description: Missing/invalid token
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Forbidden:
+      description: Wrong role or wrong organisation (tenant isolation)
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    NotFound:
+      description: Resource not found (always org-scoped)
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Validation:
+      description: Request failed zod validation
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+paths:
+  # ── Health ────────────────────────────────────────────────────────────
+  /health:
+    get:
+      tags: [Health]
+      summary: Deep health check (DB, Nomba config, Redis, money pipeline)
+      description: |
+        `checks.pipeline.metrics` reports queued webhook jobs, dead-lettered
+        events, failed webhooks/payouts (24 h) and stuck transfers (>1 h in
+        TRANSFERRING). Dead letters or stuck transfers ⇒ `status: degraded`.
+        200 for ok/degraded, 503 only when the database is down.
+      responses:
+        '200': { description: ok or degraded — body carries detail }
+        '503': { description: database unreachable }
+  /cron:
+    get:
+      tags: [Health]
+      summary: Constant-size uptime ping for external monitors
+      responses:
+        '200': { description: '`{ status, uptime, ts }` — never grows, never 503s' }
+
+  # ── Auth ──────────────────────────────────────────────────────────────
+  /api/v1/auth/send-otp:
+    post:
+      tags: [Auth]
+      summary: Send a 6-digit OTP to a member (or admin verifying email)
+      description: Rate limited 3 / 15 min per IP and per email. OTP expires in 10 minutes, 5 wrong attempts lock it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, org_slug]
+              properties:
+                email: { type: string, format: email }
+                org_slug: { type: string, description: Church join-link slug }
+      responses:
+        '200': { description: Masked confirmation (never reveals account existence) }
+        '429': { description: Rate limited }
+  /api/v1/auth/verify-otp:
+    post:
+      tags: [Auth]
+      summary: Verify OTP → member JWT (+ registration on first login)
+      description: |
+        First-time emails must include `name`; the OTP is only consumed once
+        the full flow succeeds, so a missing-name 400 does NOT burn the code.
+        Returns access token, rotating refresh token, and the member profile.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, code, org_slug]
+              properties:
+                email: { type: string, format: email }
+                code: { type: string, pattern: '^\d{6}$' }
+                org_slug: { type: string }
+                name: { type: string, description: Required for first-time registration }
+      responses:
+        '200': { description: '`{ token, refreshToken, refreshTokenExpiresAt, member }`' }
+        '400': { description: Wrong/expired code, or name required }
+  /api/v1/auth/admin/login:
+    post:
+      tags: [Auth]
+      summary: Admin/treasurer email+password login → admin JWT
+      description: Rate limited 10 / 15 min. Unverified self-registered admins get 403 EMAIL_NOT_VERIFIED.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        '200': { description: '`{ token, admin: { id, name, email, role, orgId, orgSlug } }`' }
+        '401': { description: Invalid credentials (generic message) }
+        '403': { description: Email not yet verified }
+  /api/v1/auth/admin/verify-email:
+    post:
+      tags: [Auth]
+      summary: Confirm a self-registered admin's OTP — marks verified and logs in
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, code, org_slug]
+              properties:
+                email: { type: string, format: email }
+                code: { type: string, pattern: '^\d{6}$' }
+                org_slug: { type: string }
+      responses:
+        '200': { description: '`{ token, admin }`' }
+  /api/v1/auth/admin/forgot-password:
+    post:
+      tags: [Auth]
+      summary: Email a password-reset code (never confirms account existence)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties: { email: { type: string, format: email } }
+      responses:
+        '200': { description: Generic confirmation either way }
+  /api/v1/auth/admin/reset-password:
+    post:
+      tags: [Auth]
+      summary: Verify reset code and set a new password
+      description: 'Password complexity enforced: ≥8 chars, upper, lower, digit.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, code, new_password]
+              properties:
+                email: { type: string, format: email }
+                code: { type: string, pattern: '^\d{6}$' }
+                new_password: { type: string, minLength: 8 }
+      responses:
+        '200': { description: Password updated }
+  /api/v1/auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Exchange a refresh token for a new member access token
+      description: Works after access-token expiry — the refresh token is its own DB-tracked credential, rotated on every use.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties: { token: { type: string } }
+      responses:
+        '200': { description: '`{ token, refreshToken, refreshTokenExpiresAt }`' }
+        '401': { description: Unknown/expired refresh token }
+  /api/v1/auth/admin/logout:
+    post:
+      tags: [Auth]
+      summary: Invalidate every session for the calling admin, everywhere
+      description: |
+        Admin tokens are otherwise stateless (1-day expiry, no per-request
+        DB check beyond this) — there's no concept of "just this device,"
+        so logout bumps `admin_users.token_version` and this is logout
+        everywhere. Also fired automatically when an ADMIN deactivates a
+        teammate's account, so revoked access takes effect immediately
+        instead of waiting out the token's natural expiry.
+      security: [{ adminToken: [] }]
+      responses:
+        '200': { description: 'All sessions invalidated — the caller must log in again on every device' }
+
+  # ── Organisations ────────────────────────────────────────────────────
+  /api/v1/orgs:
+    post:
+      tags: [Organisations]
+      summary: Register a church (public)
+      description: |
+        Transactional onboarding — creates the org, its first ADMIN
+        (unverified until OTP), the default payout policy (₦100k threshold,
+        2 approvers), and the default funds: Tithe (per-member VA) and
+        Offering (one shared VA). Accepts multipart with optional `logo`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, admin_name, admin_email, admin_password]
+              properties:
+                name: { type: string, minLength: 3 }
+                admin_name: { type: string }
+                admin_email: { type: string, format: email }
+                admin_password: { type: string, minLength: 8 }
+      responses:
+        '201': { description: '`{ org: { id, name, slug }, admin, joinLink }`' }
+        '422': { $ref: '#/components/responses/Validation' }
+  /api/v1/orgs/{slug}:
+    get:
+      tags: [Organisations]
+      summary: Public church lookup by join slug
+      parameters:
+        - { name: slug, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: '`{ id, name, slug, logo_url, joinLink }`' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/orgs/{id}:
+    patch:
+      tags: [Organisations]
+      summary: Update church details (own org only)
+      security: [{ adminToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Updated org }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/orgs/{id}/logo:
+    put:
+      tags: [Organisations]
+      summary: Replace the church logo (multipart field `logo`)
+      security: [{ adminToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Updated org with new logo URL }
+
+  # ── Team (admin users) ───────────────────────────────────────────────
+  /api/v1/admin-users:
+    get:
+      tags: [Team]
+      summary: Team roster with derived status (ACTIVE / INVITED / INVITE_EXPIRED / DEACTIVATED)
+      security: [{ adminToken: [] }]
+      responses:
+        '200': { description: Roster list }
+  /api/v1/admin-users/{id}:
+    patch:
+      tags: [Team]
+      summary: Revoke/restore a team member's access — role ADMIN
+      description: Guards — cannot touch SYSTEM, cannot deactivate self or the last active ADMIN.
+      security: [{ adminToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { is_active: { type: boolean } }
+      responses:
+        '200': { description: '`{ id, is_active }`' }
+  /api/v1/admin-users/invite:
+    post:
+      tags: [Team]
+      summary: Invite a treasurer/admin by email — role ADMIN
+      description: Sends a 72-hour single-use invite link. Token stored hashed.
+      security: [{ adminToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, name, role]
+              properties:
+                email: { type: string, format: email }
+                name: { type: string }
+                role: { type: string, enum: [ADMIN, TREASURER] }
+      responses:
+        '200': { description: Invite sent }
+        '409': { description: Already has an active account }
+  /api/v1/admin-users/invite/{token}:
+    get:
+      tags: [Team]
+      summary: Invite details for the accept page (public, token is the credential)
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: '`{ name, email, role, orgName, expired }`' }
+    post:
+      tags: [Team]
+      summary: Accept invite — set password, activate, log in
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties: { password: { type: string, minLength: 8 } }
+      responses:
+        '200': { description: '`{ token, admin, org }`' }
+
+  # ── Members ──────────────────────────────────────────────────────────
+  /api/v1/me:
+    get:
+      tags: [Members]
+      summary: Member profile + per-fund giving summaries
+      security: [{ memberToken: [] }]
+      responses:
+        '200': { description: Profile }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/me/funds:
+    get:
+      tags: [Members]
+      summary: Active funds for the member's church (shared-VA numbers inline)
+      security: [{ memberToken: [] }]
+      responses:
+        '200': { description: Fund list }
+  /api/v1/me/giving-history:
+    get:
+      tags: [Members]
+      summary: Member's transaction history
+      security: [{ memberToken: [] }]
+      parameters:
+        - { name: fund_type_id, in: query, schema: { type: string, format: uuid } }
+        - { name: period, in: query, schema: { type: string, pattern: '^\d{4}-\d{2}$' }, description: 'YYYY-MM' }
+        - { name: limit, in: query, schema: { type: integer, default: 20, maximum: 100 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        '200': { description: 'Transactions — `amount_kobo`, `payment_status`, `variance_kobo`, fund name' }
+  /api/v1/members:
+    get:
+      tags: [Members]
+      summary: Paginated member list for the admin dashboard
+      security: [{ adminToken: [] }]
+      responses:
+        '200': { description: '`{ members, total, limit, offset }`' }
+
+  # ── Virtual accounts ─────────────────────────────────────────────────
+  /api/v1/me/funds/{fundId}/account:
+    post:
+      tags: [Virtual Accounts]
+      summary: Get-or-create the member's dedicated VA for a fund (lazy Nomba creation)
+      description: |
+        One permanent NUBAN per member per fund. The `account_reference`
+        behind it is the reconciliation key — every inbound payment webhook
+        resolves member+fund+org from it.
+      security: [{ memberToken: [] }]
+      parameters:
+        - { name: fundId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: '`{ account_number, bank_name, fund }`' }
+        '502': { description: Nomba VA creation failed }
+  /api/v1/me/accounts:
+    get:
+      tags: [Virtual Accounts]
+      summary: All of the member's virtual accounts
+      security: [{ memberToken: [] }]
+      responses:
+        '200': { description: VA list }
+
+  # ── Public giving ────────────────────────────────────────────────────
+  /api/v1/give/{orgSlug}:
+    get:
+      tags: [Public Giving]
+      summary: Public giving page — org-level shared VA numbers per fund (no auth)
+      parameters:
+        - { name: orgSlug, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Shared VA numbers for anonymous/offering giving }
+
+  # ── Webhooks ─────────────────────────────────────────────────────────
+  /api/v1/webhooks/nomba:
+    post:
+      tags: [Webhooks]
+      summary: Nomba event sink (HMAC-verified, durable, idempotent)
+      description: |
+        **Signature**: HMAC-SHA256 over the colon-joined concatenation of
+        `event_type:requestId:merchant.userId:merchant.walletId:
+        transaction.transactionId:transaction.type:transaction.time:
+        responseCode:timestamp`, keyed with the webhook secret,
+        base64-encoded — sent as `nomba-signature` with `nomba-timestamp`.
+        The raw request bytes must reach the verifier untouched (the route
+        uses a raw body parser).
+
+        **Durability contract**: 200 is returned only after the event is a
+        pg-boss row in Postgres. Processing is asynchronous; failures retry
+        5× with backoff, then dead-letter (operator alerted).
+
+        **Handled events**: `payment_success` (credit member/shared ledger),
+        `payout_success` (settle transfer, debit ledger), `payout_failed` /
+        `payout_refund` / `payment_reversal` (release soft lock, mark FAILED),
+        `payment_failed` (logged, no action).
+      parameters:
+        - { name: nomba-signature, in: header, required: true, schema: { type: string } }
+        - { name: nomba-timestamp, in: header, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                requestId: { type: string, description: Idempotency key }
+                event_type: { type: string }
+                data: { type: object }
+      responses:
+        '200': { description: Event durably queued (or duplicate — also 200) }
+        '401': { description: Bad/missing signature or timestamp }
+
+  # ── Funds ────────────────────────────────────────────────────────────
+  /api/v1/orgs/{orgId}/funds:
+    get:
+      tags: [Funds]
+      summary: List the org's funds
+      security: [{ adminToken: [] }]
+      parameters:
+        - { name: orgId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Fund list }
+    post:
+      tags: [Funds]
+      summary: Create a fund — role ADMIN
+      description: '`expected_amt` (naira) sets a pledge — payments reconcile as EXACT/UNDER/OVER against it. CAMPAIGN funds must carry `expires_at`.'
+      security: [{ adminToken: [] }]
+      parameters:
+        - { name: orgId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 2 }
+                kind: { type: string, enum: [RECURRING, CAMPAIGN], default: RECURRING }
+                description: { type: string }
+                expected_amt: { type: number, description: Pledge in NAIRA (converted to kobo server-side) }
+                expires_at: { type: string, format: date-time }
+      responses:
+        '201': { description: Created fund }
+  /api/v1/funds/{id}:
+    get:
+      tags: [Funds]
+      summary: Get one fund
+      security: [{ adminToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Fund }
+    patch:
+      tags: [Funds]
+      summary: Update a fund — role ADMIN
+      security: [{ adminToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Updated fund }
+    delete:
+      tags: [Funds]
+      summary: Deactivate a fund — role ADMIN (soft delete; ledger history kept)
+      security: [{ adminToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Deactivated }
+
+  # ── Payouts ──────────────────────────────────────────────────────────
+  /api/v1/payouts:
+    post:
+      tags: [Payouts]
+      summary: Initiate a payout — roles ADMIN, TREASURER
+      description: |
+        `amount` is in **NAIRA** (the one exception to the kobo rule).
+        Flow: verify fund → verify/reuse destination account via Nomba name
+        lookup → atomic balance-check + soft-lock (`FOR UPDATE`, concurrent
+        initiations serialise) → route by policy threshold:
+        below `threshold_kobo` → direct transfer; at/above → approval emails
+        to eligible signatories (initiator excluded), quorum `min_approvers`.
+        Insufficient balance (incl. transfer-fee headroom) → 422.
+      security: [{ adminToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fund_type_id, bank_code, account_number, amount, purpose]
+              properties:
+                fund_type_id: { type: string, format: uuid }
+                bank_code: { type: string, example: '058' }
+                account_number: { type: string }
+                amount: { type: number, description: NAIRA }
+                purpose: { type: string }
+      responses:
+        '200': { description: Manual path — transfer initiated }
+        '201': { description: 'Approval path — `{ payoutRequestId, approverCount }`' }
+        '422': { description: Insufficient balance or not enough eligible signatories }
+    get:
+      tags: [Payouts]
+      summary: List payouts (filter by `status`, paginated)
+      security: [{ adminToken: [] }]
+      responses:
+        '200': { description: Payout list with terminal states }
+  /api/v1/payouts/fund-balances:
+    get:
+      tags: [Payouts]
+      summary: Available balance per active fund (mirrors the initiation gate exactly)
+      security: [{ adminToken: [] }]
+      responses:
+        '200': { description: '`{ transfer_fee_kobo, funds: [{ fund_type_id, fund_name, available_kobo, available_display }] }`' }
+  /api/v1/payouts/{id}:
+    get:
+      tags: [Payouts]
+      summary: Payout detail (org-scoped)
+      security: [{ adminToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Payout with destination account }
+    delete:
+      tags: [Payouts]
+      summary: Cancel a PENDING payout — initiator only, before any approval
+      description: Compare-and-set — loses to a concurrent approval. Releases the soft lock on success.
+      security: [{ adminToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Cancelled, funds unlocked }
+        '409': { description: Already actioned by a signatory }
+
+  # ── Approvals (tokenised, no JWT) ────────────────────────────────────
+  /api/v1/approve/{token}:
+    get:
+      tags: [Approvals]
+      summary: Approval-page details — the emailed token is the credential
+      description: Rate limited 5 / min per IP. Token is single-use, stored hashed, expires per policy (default 48 h).
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 'Amount, destination, purpose, `alreadyActed`' }
+        '410': { description: Token used or expired }
+    post:
+      tags: [Approvals]
+      summary: Approve — requires last 4 digits of the signatory's registered phone
+      description: |
+        Quorum not yet reached → payout becomes `PARTIAL`. Quorum reached →
+        single-fire compare-and-set advances to `APPROVED` → `TRANSFERRING`
+        and fires the Nomba transfer (exactly once, even under concurrent
+        final approvals). The initiator can never approve their own payout.
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phone_last4]
+              properties:
+                phone_last4: { type: string, pattern: '^\d{4}$' }
+      responses:
+        '200': { description: '`{ status: PARTIAL | TRANSFER_INITIATED | APPROVED, message }`' }
+        '401': { description: Phone verification failed }
+        '409': { description: Already responded / payout no longer awaiting approval }
+  /api/v1/approve/{token}/decline:
+    post:
+      tags: [Approvals]
+      summary: Decline — any single decline kills the payout instantly and releases the soft lock
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phone_last4]
+              properties:
+                phone_last4: { type: string, pattern: '^\d{4}$' }
+      responses:
+        '200': { description: '`{ status: DECLINED }` — funds available again' }
+
+  # ── Signatories ──────────────────────────────────────────────────────
+  /api/v1/signatories:
+    get:
+      tags: [Signatories]
+      summary: List signatories
+      security: [{ adminToken: [] }]
+      responses:
+        '200': { description: Signatory list }
+    post:
+      tags: [Signatories]
+      summary: Add a signatory — role ADMIN
+      description: Signatories approve via emailed links; no login. `phone` is required for them to act (last-4 identity check).
+      security: [{ adminToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, role]
+              properties:
+                name: { type: string }
+                email: { type: string, format: email }
+                phone: { type: string, example: '+2348012345678' }
+                role: { type: string, example: ELDER }
+                can_initiate: { type: boolean, default: false }
+                can_approve: { type: boolean, default: true }
+      responses:
+        '201': { description: Created signatory }
+  /api/v1/signatories/policy:
+    get:
+      tags: [Signatories]
+      summary: Get the payout policy (threshold, quorum, expiries)
+      security: [{ adminToken: [] }]
+      responses:
+        '200': { description: '`{ min_approvers, threshold_kobo, token_expiry_hours, auto_decline_hours }`' }
+    patch:
+      tags: [Signatories]
+      summary: Update the payout policy — role ADMIN
+      security: [{ adminToken: [] }]
+      responses:
+        '200': { description: Updated policy }
+  /api/v1/signatories/{id}:
+    patch:
+      tags: [Signatories]
+      summary: Update a signatory — role ADMIN
+      security: [{ adminToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Updated }
+    delete:
+      tags: [Signatories]
+      summary: Deactivate a signatory — role ADMIN
+      security: [{ adminToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Deactivated }
+
+  # ── Dashboard (roles ADMIN, TREASURER) ───────────────────────────────
+  /api/v1/dashboard/summary:
+    get:
+      tags: [Dashboard]
+      summary: Top-level collection metrics
+      security: [{ adminToken: [] }]
+      responses:
+        '200': { description: Summary with kobo totals + display strings }
+  /api/v1/dashboard/fund-breakdown:
+    get:
+      tags: [Dashboard]
+      summary: Per-fund balances and totals
+      security: [{ adminToken: [] }]
+      responses:
+        '200': { description: Array per fund }
+  /api/v1/dashboard/member-status:
+    get:
+      tags: [Dashboard]
+      summary: Who paid, who owes, deficits
+      security: [{ adminToken: [] }]
+      responses:
+        '200': { description: Member status array }
+  /api/v1/dashboard/payout-history:
+    get:
+      tags: [Dashboard]
+      summary: Recent payout requests
+      security: [{ adminToken: [] }]
+      responses:
+        '200': { description: Payout history }
+  /api/v1/dashboard/transactions:
+    get:
+      tags: [Dashboard]
+      summary: Org-wide giving ledger (paginated, fund/period filters, limit clamped)
+      security: [{ adminToken: [] }]
+      responses:
+        '200': { description: Paginated transactions }
+  /api/v1/dashboard/activity:
+    get:
+      tags: [Dashboard]
+      summary: Recent audit-log activity (limit capped at 50)
+      security: [{ adminToken: [] }]
+      responses:
+        '200': { description: Activity feed }
+
+  # ── Reports (roles ADMIN, TREASURER) ─────────────────────────────────
+  /api/v1/orgs/{orgId}/reports/giving:
+    get:
+      tags: [Reports]
+      summary: Org giving report — JSON or CSV
+      security: [{ adminToken: [] }]
+      parameters:
+        - { name: orgId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: period, in: query, schema: { type: string, pattern: '^\d{4}-\d{2}$' } }
+        - { name: fund_type_id, in: query, schema: { type: string, format: uuid } }
+        - { name: year, in: query, schema: { type: integer } }
+        - { name: format, in: query, schema: { type: string, enum: [csv] }, description: '`csv` returns a downloadable file' }
+        - { name: view, in: query, schema: { type: string, enum: [summary] } }
+      responses:
+        '200': { description: Report (JSON) or CSV with download headers }
+  /api/v1/members/{id}/statement:
+    get:
+      tags: [Reports]
+      summary: Member giving statement (org-scoped internally) — JSON or CSV
+      security: [{ adminToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid }, description: MEMBER id }
+        - { name: format, in: query, schema: { type: string, enum: [csv] } }
+      responses:
+        '200': { description: Statement }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/reports/arrears:
+    get:
+      tags: [Reports]
+      summary: Members with outstanding pledge balances
+      security: [{ adminToken: [] }]
+      responses:
+        '200': { description: Arrears list }
+
+  # ── Banks ────────────────────────────────────────────────────────────
+  /api/v1/banks:
+    get:
+      tags: [Banks]
+      summary: Nigerian bank list (for the payout destination picker)
+      security: [{ adminToken: [] }]
+      responses:
+        '200': { description: Bank list with CBN codes }
+  /api/v1/banks/lookup:
+    post:
+      tags: [Banks]
+      summary: Resolve an account number to its registered name via Nomba
+      security: [{ adminToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [bank_code, account_number]
+              properties:
+                bank_code: { type: string }
+                account_number: { type: string }
+      responses:
+        '200': { description: '`{ account_name }` — must match before a payout can target it' }
+        '502': { description: Nomba lookup failed }

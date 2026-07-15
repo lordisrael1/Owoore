@@ -83,13 +83,23 @@ export const quorumService = {
     phone: string | null;
     role:  string;
   }>> {
+    // Exclude the initiator BY EMAIL, matching how isInitiator() blocks
+    // them at approval time. The old `s.id != $2` compared a signatories
+    // UUID against an admin_users UUID — different tables, never matches —
+    // so an initiator-signatory was counted toward quorum feasibility and
+    // emailed a link they could never act on: with exactly minApprovers
+    // eligible people, quorum became unreachable and the payout silently
+    // expired. NOT EXISTS is null-safe if the admin row is missing.
     return queryMany(
-      `SELECT id, name, email, phone, role
-       FROM signatories
-       WHERE org_id       = $1
-         AND can_approve  = TRUE
-         AND is_active    = TRUE
-         AND id           != $2`,  // exclude initiator
+      `SELECT s.id, s.name, s.email, s.phone, s.role
+       FROM signatories s
+       WHERE s.org_id      = $1
+         AND s.can_approve = TRUE
+         AND s.is_active   = TRUE
+         AND NOT EXISTS (
+           SELECT 1 FROM admin_users a
+           WHERE a.id = $2 AND LOWER(a.email) = LOWER(s.email)
+         )`,
       [orgId, initiatorId],
     );
   },

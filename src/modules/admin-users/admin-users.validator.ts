@@ -20,5 +20,13 @@ export const inviteTokenParamSchema = z.object({
   token: z.string().uuid('Invalid invite token'),
 });
 
+export const adminUserIdParamSchema = z.object({
+  id: z.string().uuid('Invalid team member id'),
+});
+
+export const updateAdminUserSchema = z.object({
+  is_active: z.boolean(),
+});
+
 export type InviteInput       = z.infer<typeof inviteSchema>;
 export type AcceptInviteInput = z.infer<typeof acceptInviteSchema>;

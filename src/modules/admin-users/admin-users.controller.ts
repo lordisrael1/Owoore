@@ -3,6 +3,28 @@ import { catchAsync } from '../../utils/catchAsync';
 import { adminUserService } from './admin-users.service';
 
 export const adminUserController = {
+  list: catchAsync(async (req: Request, res: Response) => {
+    const user = (req as any).user;
+    const data = await adminUserService.listTeam(user.orgId);
+    res.json({ success: true, data });
+  }),
+
+  setActive: catchAsync(async (req: Request, res: Response) => {
+    const user = (req as any).user;
+    const { id } = req.params;
+    const { is_active } = req.body;
+
+    const data = await adminUserService.setActive({
+      orgId:      user.orgId,
+      actorId:    user.sub,
+      actorEmail: user.email,
+      targetId:   id as string,
+      isActive:   is_active,
+    });
+
+    res.json({ success: true, data });
+  }),
+
   invite: catchAsync(async (req: Request, res: Response) => {
     const user = (req as any).user;
     const { email, name, role } = req.body;

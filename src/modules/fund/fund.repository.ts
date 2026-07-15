@@ -1,5 +1,5 @@
-import { query, queryOne, queryMany } from '../../db';
-import { toKobo, fromKobo } from '../../utils/kobo';
+import { queryOne, queryMany } from '../../db';
+import { toKobo } from '../../utils/kobo';
 
 export interface FundType {
   id:               string;

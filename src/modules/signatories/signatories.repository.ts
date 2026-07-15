@@ -1,4 +1,4 @@
-import { queryOne, queryMany, query } from '../../db';
+import { queryOne, queryMany } from '../../db';
 
 export interface Signatory {
   id:           string;

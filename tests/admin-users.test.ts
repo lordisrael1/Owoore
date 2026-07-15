@@ -110,3 +110,80 @@ describe('POST /api/v1/admin-users/invite/:token — accept + set password', () 
     expect(res.status).toBe(422);
   });
 });
+
+describe('GET /api/v1/admin-users — team roster', () => {
+  it('rejects requests without a token', async () => {
+    const res = await request(app).get('/api/v1/admin-users');
+    expect(res.status).toBe(401);
+  });
+
+  it('rejects a MEMBER token', async () => {
+    const res = await request(app)
+      .get('/api/v1/admin-users')
+      .set('Authorization', bearer(makeMemberToken(orgId)));
+    expect(res.status).toBe(403);
+  });
+
+  it('returns an empty roster for a fresh org (ADMIN)', async () => {
+    const res = await request(app)
+      .get('/api/v1/admin-users')
+      .set('Authorization', bearer(adminToken));
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data).toEqual([]);
+  });
+
+  it('allows a TREASURER to view the roster', async () => {
+    const res = await request(app)
+      .get('/api/v1/admin-users')
+      .set('Authorization', bearer(makeAdminToken('TREASURER', orgId)));
+
+    expect(res.status).toBe(200);
+  });
+});
+
+describe('PATCH /api/v1/admin-users/:id — access management', () => {
+  it('rejects requests without a token', async () => {
+    const res = await request(app)
+      .patch(`/api/v1/admin-users/${randomUUID()}`)
+      .send({ is_active: false });
+    expect(res.status).toBe(401);
+  });
+
+  it('rejects a TREASURER token — only ADMINs manage access', async () => {
+    const res = await request(app)
+      .patch(`/api/v1/admin-users/${randomUUID()}`)
+      .set('Authorization', bearer(makeAdminToken('TREASURER', orgId)))
+      .send({ is_active: false });
+
+    expect(res.status).toBe(403);
+  });
+
+  it('422s on a malformed id', async () => {
+    const res = await request(app)
+      .patch('/api/v1/admin-users/not-a-uuid')
+      .set('Authorization', bearer(adminToken))
+      .send({ is_active: false });
+
+    expect(res.status).toBe(422);
+  });
+
+  it('422s when is_active is missing from the body', async () => {
+    const res = await request(app)
+      .patch(`/api/v1/admin-users/${randomUUID()}`)
+      .set('Authorization', bearer(adminToken))
+      .send({});
+
+    expect(res.status).toBe(422);
+  });
+
+  it('404s for a team member outside the org', async () => {
+    const res = await request(app)
+      .patch(`/api/v1/admin-users/${randomUUID()}`)
+      .set('Authorization', bearer(adminToken))
+      .send({ is_active: false });
+
+    expect(res.status).toBe(404);
+  });
+});

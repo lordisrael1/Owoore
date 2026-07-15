@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { validateBody } from '../../middleware/validateRequest';
+import { authenticateAdmin } from '../../middleware/authenticate';
 import { otpRateLimiter, adminLoginRateLimiter, generalRateLimiter } from '../../middleware/ratelimiter';
 import {
   sendOtpSchema,
@@ -27,6 +28,10 @@ import { authController } from './auth.controller';
  *   Deliberately NOT gated behind the `authenticate` middleware — the whole
  *   point is that this works even after the access token has expired. The
  *   refresh token itself (member_refresh_tokens) is the credential here.
+ * POST /auth/admin/logout → invalidate every JWT issued to the calling
+ *   admin, everywhere (admin tokens are otherwise stateless with a 1-day
+ *   expiry — there's no way to kill just the current device without a
+ *   sessions table, so logout = logout-everywhere here).
  */
 const router = Router();
 
@@ -70,6 +75,11 @@ router.post('/refresh',
   generalRateLimiter,
   validateBody(refreshTokenSchema),
   authController.refresh,
+);
+
+router.post('/admin/logout',
+  authenticateAdmin,
+  authController.adminLogout,
 );
 
 export default router;

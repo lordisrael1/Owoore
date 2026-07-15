@@ -39,18 +39,19 @@ export const adminAuthService = {
   }> {
     // Fetch admin — join with org to get orgId and slug
     const admin = await queryOne<{
-      id:          string;
-      name:        string;
-      email:       string;
-      bcrypt_hash: string;
-      role:        string;
-      is_active:   boolean;
-      is_verified: boolean;
-      org_id:      string;
-      org_slug:    string;
+      id:            string;
+      name:          string;
+      email:         string;
+      bcrypt_hash:   string;
+      role:          string;
+      is_active:     boolean;
+      is_verified:   boolean;
+      org_id:        string;
+      org_slug:      string;
+      token_version: number;
     }>(
       `SELECT a.id, a.name, a.email, a.bcrypt_hash, a.role, a.is_active, a.is_verified,
-              a.org_id, o.slug AS org_slug
+              a.org_id, o.slug AS org_slug, a.token_version
        FROM admin_users a
        JOIN organisations o ON o.id = a.org_id
        WHERE LOWER(a.email) = LOWER($1)
@@ -78,10 +79,11 @@ export const adminAuthService = {
     );
 
     const token = signAdminToken({
-      sub:   admin.id,
-      orgId: admin.org_id,
-      email: admin.email,
-      role:  admin.role as 'ADMIN' | 'TREASURER' | 'SIGNATORY',
+      sub:          admin.id,
+      orgId:        admin.org_id,
+      email:        admin.email,
+      role:         admin.role as 'ADMIN' | 'TREASURER' | 'SIGNATORY',
+      tokenVersion: admin.token_version,
     });
 
     logger.info({
@@ -132,10 +134,11 @@ export const adminAuthService = {
     }
 
     const token = signAdminToken({
-      sub:   admin.id,
-      orgId: org.id,
-      email: admin.email,
-      role:  admin.role as 'ADMIN' | 'TREASURER' | 'SIGNATORY',
+      sub:          admin.id,
+      orgId:        org.id,
+      email:        admin.email,
+      role:         admin.role as 'ADMIN' | 'TREASURER' | 'SIGNATORY',
+      tokenVersion: admin.token_version,
     });
 
     logger.info({ admin_id: admin.id, org_id: org.id }, '[AdminAuth] Email verified — account activated');
@@ -259,6 +262,23 @@ export const adminAuthService = {
       '[AdminAuth] Password reset completed');
 
     return { message: 'Password updated. You can now sign in with your new password.' };
+  },
+
+  /**
+   * logout — invalidates every JWT issued to this admin, everywhere.
+   * Admin tokens are stateless (1-day expiry, no per-request DB check
+   * beyond token_version), so there's no concept of "just this device" —
+   * bumping token_version is the only revocation lever, and it kills all
+   * of them at once. See 032_add_token_version_to_admin_users.sql.
+   */
+  async logout(adminId: string): Promise<void> {
+    const { adminUserRepository } = await import('../admin-users/admin-users.repository');
+    const { evictAdminTokenVersionCache } = await import('../../config/jwt');
+
+    await adminUserRepository.bumpTokenVersion(adminId);
+    await evictAdminTokenVersionCache(adminId);
+
+    logger.info({ admin_id: adminId }, '[AdminAuth] Logged out — all sessions invalidated');
   },
 
   /**

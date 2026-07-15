@@ -137,13 +137,21 @@ export const payoutService = {
     }
 
     assertTransition(payout.status, 'CANCELLED');
-    await payoutRepository.updateStatus(payoutId, 'CANCELLED');
+    // CAS: if a signatory approved between our read and this write, the
+    // cancel must lose — never stomp an in-flight approval/transfer.
+    const cancelled = await payoutRepository.transitionStatus(
+      payoutId, ['PENDING'], 'CANCELLED',
+    );
+    if (!cancelled) {
+      throw Errors.conflict('This payout was just actioned by a signatory and can no longer be cancelled.');
+    }
 
-    // Release the soft lock if one was applied
+    // Release the soft lock against the exact period row it was applied to
     await ledgerService.releaseLock({
       org_id:       orgId,
       fund_type_id: payout.fund_type_id,
       amountKobo:   payout.amount_kobo,
+      lockedPeriod: payout.locked_period_month,
     });
 
     logger.info({ payout_id: payoutId }, '[PayoutService] Payout cancelled — funds unlocked');

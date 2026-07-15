@@ -1,6 +1,7 @@
 import { logger } from '../../utils/logger';
 import { formatNairaCompact } from '../../utils/formatMoney';
-import { resend, FROM_ADDRESS, EMAIL_SUBJECTS } from '../../config/resend';
+import { EMAIL_SUBJECTS } from '../../config/resend';
+import { emailService } from '../../notifications/email/email.service';
 import type { PaymentStatus } from '../transactions/reconciliation.service';
 
 /**
@@ -69,19 +70,9 @@ export const notificationDispatcher = {
     const { to, subject, html } = params;
 
     try {
-      const result = await resend.emails.send({
-        from:    FROM_ADDRESS,
-        to,
-        subject,
-        html,
-      });
-
-      logger.info({
-        to:         to.replace(/(?<=.{3}).(?=.*@)/g, '*'), // mask email for logs
-        subject,
-        resend_id:  result.data?.id,
-      }, '[Notifications] Payment confirmation email sent');
-
+      // Route through emailService — the single outbound-email chokepoint
+      // (test-env suppression, result.error handling, masked logging).
+      await emailService.send({ to, subject, html }, true);
     } catch (err: any) {
       // Non-fatal — the payment is already recorded in the DB
       logger.warn({

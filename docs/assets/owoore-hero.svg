@@ -1,0 +1,69 @@
+<svg width="720" height="520" viewBox="0 0 720 520" xmlns="http://www.w3.org/2000/svg" font-family="'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <filter id="cardShadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#04140b" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <!-- Browser mock card — transparent canvas, sits directly on the docs page background -->
+  <rect x="20" y="20" width="680" height="480" rx="18" fill="#ffffff" filter="url(#cardShadow)"/>
+
+  <!-- Chrome strip -->
+  <circle cx="48" cy="42" r="6" fill="#f87171"/>
+  <circle cx="68" cy="42" r="6" fill="#fbbf24"/>
+  <circle cx="88" cy="42" r="6" fill="#34d399"/>
+  <line x1="20" y1="64" x2="700" y2="64" stroke="#e5e7eb" stroke-width="1"/>
+
+  <!-- Panel 1: Register Church -->
+  <text x="44" y="100" font-size="16" font-weight="700" fill="#111827">Register Church</text>
+  <rect x="596" y="82" width="72" height="26" rx="13" fill="#dcfce7"/>
+  <text x="632" y="99" text-anchor="middle" font-size="12" font-weight="700" fill="#166534">POST</text>
+  <text x="44" y="124" font-size="13" font-family="'Cascadia Code', Consolas, Menlo, monospace" fill="#6b7280">/api/v1/orgs</text>
+
+  <rect x="44" y="138" width="632" height="112" rx="10" fill="#0b1f16"/>
+  <g font-family="'Cascadia Code', Consolas, Menlo, monospace" font-size="12.5">
+    <text x="62" y="160" fill="#7dd3ac">{</text>
+    <text x="80" y="180" fill="#93c5fd">org</text>
+    <text x="104" y="180" fill="#94a3b8">: { </text>
+    <text x="136" y="180" fill="#93c5fd">name</text>
+    <text x="176" y="180" fill="#94a3b8">: </text>
+    <text x="194" y="180" fill="#86efac">"Grace Bible Church"</text>
+    <text x="352" y="180" fill="#94a3b8"> },</text>
+    <text x="80" y="200" fill="#93c5fd">admin</text>
+    <text x="126" y="200" fill="#94a3b8">: { </text>
+    <text x="158" y="200" fill="#93c5fd">is_verified</text>
+    <text x="236" y="200" fill="#94a3b8">: </text>
+    <text x="254" y="200" fill="#f0abfc">false</text>
+    <text x="286" y="200" fill="#94a3b8"> },</text>
+    <text x="80" y="220" fill="#93c5fd">joinLink</text>
+    <text x="136" y="220" fill="#94a3b8">: </text>
+    <text x="154" y="220" fill="#86efac">"owoore.com/join/grace-bible-church"</text>
+  </g>
+
+  <!-- Panel 2: Verify OTP -->
+  <text x="44" y="294" font-size="16" font-weight="700" fill="#111827">Verify OTP</text>
+  <rect x="596" y="276" width="72" height="26" rx="13" fill="#dcfce7"/>
+  <text x="632" y="293" text-anchor="middle" font-size="12" font-weight="700" fill="#166534">POST</text>
+  <text x="44" y="318" font-size="13" font-family="'Cascadia Code', Consolas, Menlo, monospace" fill="#6b7280">/api/v1/auth/verify-otp</text>
+
+  <rect x="44" y="332" width="632" height="112" rx="10" fill="#0b1f16"/>
+  <g font-family="'Cascadia Code', Consolas, Menlo, monospace" font-size="12.5">
+    <text x="62" y="354" fill="#7dd3ac">{</text>
+    <text x="80" y="374" fill="#93c5fd">member</text>
+    <text x="136" y="374" fill="#94a3b8">: { </text>
+    <text x="168" y="374" fill="#93c5fd">isNew</text>
+    <text x="214" y="374" fill="#94a3b8">: </text>
+    <text x="232" y="374" fill="#f0abfc">true</text>
+    <text x="262" y="374" fill="#94a3b8">, </text>
+    <text x="278" y="374" fill="#93c5fd">memberCode</text>
+    <text x="366" y="374" fill="#94a3b8">: </text>
+    <text x="384" y="374" fill="#86efac">"CHR-00001"</text>
+    <text x="476" y="374" fill="#94a3b8"> },</text>
+    <text x="80" y="394" fill="#93c5fd">token</text>
+    <text x="126" y="394" fill="#94a3b8">: </text>
+    <text x="144" y="394" fill="#86efac">"eyJhbGciOiJIUzI1NiJ9..."</text>
+    <text x="80" y="414" fill="#93c5fd">refreshToken</text>
+    <text x="178" y="414" fill="#94a3b8">: </text>
+    <text x="196" y="414" fill="#86efac">"8f2c1a9e7d4b6c3a..."</text>
+  </g>
+</svg>

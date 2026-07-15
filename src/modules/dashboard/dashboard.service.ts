@@ -1,5 +1,4 @@
 import { dashboardRepository } from './dashboard.repository';
-import { fromKobo } from '../../utils/kobo';
 import { formatNaira } from '../../utils/formatMoney';
 
 /**
@@ -86,6 +85,29 @@ export const dashboardService = {
   },
 
   /**
+   * getTransactions — org-wide giving ledger (member + anonymous inflows).
+   * Paginated; returns total for the frontend pager.
+   */
+  async getTransactions(orgId: string, opts: {
+    fundTypeId?: string;
+    period?:     string;
+    limit:       number;
+    offset:      number;
+  }) {
+    const { rows, total } = await dashboardRepository.getTransactions(orgId, opts);
+
+    return {
+      total,
+      limit:  opts.limit,
+      offset: opts.offset,
+      transactions: rows.map((r) => ({
+        ...r,
+        amount_display: formatNaira(Number(r.amount_kobo)),
+      })),
+    };
+  },
+
+  /**
    * getActivity — audit_log rows shaped for the <ActivityFeed> component:
    * { id, type, title, desc, time }. Rendering strings are built here so
    * the frontend stays a dumb list.
@@ -156,6 +178,16 @@ export const dashboardService = {
           type  = 'member';
           title = `${m.invitee_name ?? 'A teammate'} invited as ${m.role ?? 'TREASURER'}`;
           desc  = m.invitee_email ?? '';
+          break;
+        case 'ADMIN_DEACTIVATED':
+          type  = 'member';
+          title = `${m.target_name ?? 'A teammate'}'s access revoked`;
+          desc  = `${m.target_email ?? ''}${row.actor_email ? ` · by ${row.actor_email}` : ''}`;
+          break;
+        case 'ADMIN_REACTIVATED':
+          type  = 'member';
+          title = `${m.target_name ?? 'A teammate'}'s access restored`;
+          desc  = `${m.target_email ?? ''}${row.actor_email ? ` · by ${row.actor_email}` : ''}`;
           break;
       }
 
